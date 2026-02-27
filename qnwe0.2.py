@@ -5,6 +5,7 @@ import random
 from collections import Counter, defaultdict
 import warnings
 import time
+from datetime import datetime
 
 # Ignorar advertencias, las manejaremos explícitamente
 warnings.filterwarnings("ignore", category=UserWarning)
