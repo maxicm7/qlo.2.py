@@ -36,7 +36,7 @@ def load_data_files(data_file, history_file):
         if history_file.name.endswith('.xlsx'):
             df_hist_raw = pd.read_excel(history_file, header=None)
         else:
-            df_hist_raw = pd.read_csv(history_file, header=None, encoding='latin1')
+            df_hist_raw = pd.read_csv(history_file, header=None, encoding='utf-8-sig')
         
         # Asumimos que las combinaciones empiezan desde la primera o segunda columna
         start_col = 1 if isinstance(df_hist_raw.iloc[0, 0], (datetime, pd.Timestamp)) or pd.api.types.is_datetime64_any_dtype(df_hist_raw.iloc[:, 0]) else 0
