@@ -1,5 +1,5 @@
-# Agente Predictivo Homeostático con Dependencia Dinámica
-# -------------------------------------------------------
+# Agente Predictivo Homeostático con Dependencia Dinámica v2.3 (FINAL)
+# --------------------------------------------------------------------
 # ANTES DE USAR: Asegúrate de instalar las librerías necesarias.
 # En tu terminal: pip install streamlit pandas numpy scikit-learn openpyxl
 
@@ -11,82 +11,121 @@ from collections import Counter, defaultdict
 import warnings
 import time
 
-# Ignorar advertencias
+# Ignorar advertencias de pandas
 warnings.filterwarnings("ignore")
 
-# --- FUNCIONES DE CARGA Y ANÁLISIS ---
+# --- 1. FUNCIONES DE CARGA ROBUSTA (Corregido: Separadores y Nombres) ---
 
 @st.cache_data
 def load_data_files(data_file, history_file):
-    """Carga y procesa archivos corrigiendo errores de formato (decimales, texto, etc)."""
+    """
+    Carga y procesa ambos archivos.
+    - Detecta automáticamente separadores (; o ,).
+    - Normaliza nombres de columnas (Numero/Número/Num).
+    - Corrige errores de formato numérico (10.0 -> 10).
+    """
     numero_a_atraso, numero_a_frecuencia, atraso_counts, total_atraso_dataset, historical_sets = {}, {}, {}, 0, []
     
-    # 1. Cargar datos actuales (Atraso, Frecuencia)
+    # --- PROCESAR ARCHIVO DE DATOS (ATRASO/FRECUENCIA) ---
     try:
-        df = pd.read_csv(data_file, encoding='utf-8-sig')
-        df.columns = df.columns.str.strip() # Limpiar espacios en nombres de columnas
+        # 1. Intentar leer con coma (estándar)
+        try:
+            df = pd.read_csv(data_file, encoding='utf-8-sig')
+            if len(df.columns) < 2: # Si sale todo en 1 columna, probamos punto y coma
+                data_file.seek(0)
+                df = pd.read_csv(data_file, sep=';', encoding='utf-8-sig')
+        except:
+            data_file.seek(0)
+            df = pd.read_csv(data_file, sep=';', encoding='utf-8-sig')
+
+        # 2. Normalizar nombres de columnas (quitar espacios, minúsculas, tildes)
+        df.columns = df.columns.str.strip().str.lower() \
+            .str.replace('ú', 'u').str.replace('ó', 'o').str.replace('é', 'e').str.replace('á', 'a').str.replace('í', 'i')
         
-        # --- CORRECCIÓN CRÍTICA PARA '10.0' ---
-        # 1. Forzar conversión a numérico (convierte errores a NaN)
+        # 3. Mapeo de sinónimos para encontrar las columnas correctas
+        col_map = {
+            'numero': 'Numero', 'num': 'Numero', 'nro': 'Numero', 'number': 'Numero', 'ball': 'Numero',
+            'atraso': 'Atraso', 'delay': 'Atraso', 'ausencia': 'Atraso',
+            'frecuencia': 'Frecuencia', 'freq': 'Frecuencia', 'cantidad': 'Frecuencia', 'count': 'Frecuencia'
+        }
+        df = df.rename(columns=col_map)
+
+        # 4. Si no encuentra nombres, intentar por posición (Col 1, 2, 3)
+        if 'Numero' not in df.columns:
+            if len(df.columns) >= 3:
+                st.warning("⚠️ No se detectaron encabezados estándar. Asumiendo orden: Col1=Numero, Col2=Atraso, Col3=Frecuencia.")
+                df.columns = ['Numero', 'Atraso', 'Frecuencia'] + list(df.columns[3:])
+            else:
+                st.error(f"❌ El archivo debe tener columnas: Numero, Atraso, Frecuencia. Se detectaron: {list(df.columns)}")
+                return None
+
+        # 5. Limpieza de datos (Evitar error '10.0' y textos)
         df['Numero'] = pd.to_numeric(df['Numero'], errors='coerce')
-        # 2. Eliminar filas vacías o con errores
-        df = df.dropna(subset=['Numero'])
-        # 3. Convertir a entero (quita el .0) y luego a string limpio
-        df['Numero'] = df['Numero'].astype(int).astype(str)
+        df = df.dropna(subset=['Numero']) # Borrar filas vacías
+        df['Numero'] = df['Numero'].astype(int).astype(str) # Convertir a entero y luego texto limpio
         
-        # Asegurar que Atraso y Frecuencia sean numéricos
         df['Atraso'] = pd.to_numeric(df['Atraso'], errors='coerce').fillna(0).astype(int)
         df['Frecuencia'] = pd.to_numeric(df['Frecuencia'], errors='coerce').fillna(0).astype(int)
 
+        # Crear diccionarios de acceso rápido
         numero_a_atraso = dict(zip(df['Numero'], df['Atraso']))
         numero_a_frecuencia = dict(zip(df['Numero'], df['Frecuencia']))
         atraso_counts = df['Atraso'].value_counts().to_dict()
         total_atraso_dataset = df['Atraso'].sum()
         
-        st.success(f"✅ Archivo de datos cargado: {len(df)} números procesados correctamente.")
+        st.success(f"✅ Datos cargados correctamente: {len(df)} números procesados.")
+        
     except Exception as e:
-        st.error(f"Error al procesar el archivo de datos (Atraso/Frecuencia): {e}")
+        st.error(f"Error al procesar el archivo de Datos: {str(e)}")
         return None
 
-    # 2. Cargar historial de combinaciones
+    # --- PROCESAR ARCHIVO DE HISTORIAL ---
     try:
         if history_file.name.endswith('.xlsx'):
             df_hist_raw = pd.read_excel(history_file, header=None)
         else:
-            df_hist_raw = pd.read_csv(history_file, header=None, encoding='utf-8-sig')
-        
-        # Convertir todo el dataframe a numérico, forzando errores a NaN
+            # Intento inteligente de separador para CSV de historial
+            try:
+                df_hist_raw = pd.read_csv(history_file, header=None, encoding='utf-8-sig')
+                if df_hist_raw.shape[1] < 2:
+                    history_file.seek(0)
+                    df_hist_raw = pd.read_csv(history_file, sep=';', header=None, encoding='utf-8-sig')
+            except:
+                history_file.seek(0)
+                df_hist_raw = pd.read_csv(history_file, sep=';', header=None, encoding='utf-8-sig')
+
+        # Convertir todo a números (ignora fechas y texto)
         df_numeric = df_hist_raw.apply(pd.to_numeric, errors='coerce')
         
         temp_sets = []
         for _, row in df_numeric.iterrows():
-            # Extraer números válidos, ignorando NaNs y asegurando que sean enteros
+            # Extraer números válidos (asumiendo lotería entre 0 y 150)
             numeros_validos = {int(x) for x in row if pd.notna(x) and 0 <= x <= 150}
-            
-            # Filtro: Solo guardamos si parece una combinación de lotería (mínimo 5 números)
+            # Solo guardar si hay suficientes números para una jugada (mínimo 5)
             if len(numeros_validos) >= 5:
                 temp_sets.append(numeros_validos)
         
         historical_sets = temp_sets
         
         if not historical_sets:
-            st.warning("⚠️ No se encontraron combinaciones válidas en el historial.")
+            st.warning("⚠️ El historial parece estar vacío o no tiene números válidos.")
             return None
             
-        st.success(f"✅ Archivo de historial cargado: {len(historical_sets)} sorteos válidos.")
+        st.success(f"✅ Historial cargado: {len(historical_sets)} sorteos válidos encontrados.")
+        
     except Exception as e:
-        st.error(f"Error crítico al procesar el historial: {e}")
+        st.error(f"Error al procesar el archivo de Historial: {e}")
         return None
         
     return numero_a_atraso, numero_a_frecuencia, atraso_counts, total_atraso_dataset, historical_sets
 
+# --- 2. LÓGICA DEL AGENTE (Cálculos) ---
+
 def calcular_metricas(combinacion, numero_a_atraso, numero_a_frecuencia, total_atraso_dataset):
-    """Calcula métricas clave para una combinación."""
-    # Aseguramos que los números de la combinación se comparen como strings limpios
+    """Calcula las estadísticas de una combinación candidata."""
     combo_valido = [n for n in combinacion if str(n) in numero_a_atraso]
     
-    if len(combo_valido) < 5: 
-        return None
+    if len(combo_valido) < 5: return None
 
     atrasos = [numero_a_atraso.get(str(n), 0) for n in combo_valido]
     frecuencias = [numero_a_frecuencia.get(str(n), 0) for n in combo_valido]
@@ -94,6 +133,7 @@ def calcular_metricas(combinacion, numero_a_atraso, numero_a_frecuencia, total_a
     mean_atraso = np.mean(atrasos) if atrasos else 0
     mean_frecuencia = np.mean(frecuencias) if frecuencias else 0
     
+    # Coeficiente de Variación (CV)
     cv_f = (np.std(frecuencias) / mean_frecuencia) if mean_frecuencia > 0 else 0
     cv_a = (np.std(atrasos) / mean_atraso) if mean_atraso > 0 else 0
 
@@ -107,33 +147,30 @@ def calcular_metricas(combinacion, numero_a_atraso, numero_a_frecuencia, total_a
 
 @st.cache_data
 def analizar_historial_global(_historical_sets, _numero_a_atraso, _numero_a_frecuencia, _total_atraso_dataset):
-    """Establece reglas globales basadas en el historial."""
+    """Analiza TODO el historial para sacar los promedios (Homeostasis)."""
     lista_metricas = []
     for s in _historical_sets:
         m = calcular_metricas(list(s), _numero_a_atraso, _numero_a_frecuencia, _total_atraso_dataset)
-        if m is not None:
-            lista_metricas.append(m)
+        if m: lista_metricas.append(m)
     
     if not lista_metricas: 
-        return {
-            'suma': {'mean': 0, 'std': 0, 'range': (0, 9999)},
-            'pares': {'values': {2,3,4}},
-            'cv_frecuencia': {'range': (0, 5)},
-            'cv_atraso': {'range': (0, 5)},
-            'calculo_especial': {'range': (0, 9999)}
-        }
+        return {'suma': {'mean': 0, 'std': 0, 'range': (0, 9999)},
+                'pares': {'values': {2,3,4}},
+                'cv_frecuencia': {'range': (0, 5)},
+                'cv_atraso': {'range': (0, 5)}}
         
-    metricas_agrupadas = {key: [d[key] for d in lista_metricas] for key in lista_metricas[0]}
+    metricas = {key: [d[key] for d in lista_metricas] for key in lista_metricas[0]}
     reglas = {}
-    for metrica, valores in metricas_agrupadas.items():
+    for metrica, valores in metricas.items():
         mean, std = np.mean(valores), np.std(valores)
+        # Definimos el rango aceptable (Promedio +/- 2.5 desviaciones)
         reglas[metrica] = {'mean': mean, 'std': std, 'range': (mean - 2.5 * std, mean + 2.5 * std)}
-    reglas['pares']['values'] = set(int(p) for p in metricas_agrupadas['pares'])
+    reglas['pares']['values'] = set(int(p) for p in metricas['pares'])
     return reglas
 
 @st.cache_data
 def analizar_dependencia_dinamica(historical_sets, window_size):
-    """Encuentra los números que salen juntos recientemente."""
+    """Descubre qué números salen juntos RECIENTEMENTE (Socios)."""
     recent_history = historical_sets[-window_size:]
     co_occurrence = defaultdict(int)
     for combo_set in recent_history:
@@ -151,30 +188,28 @@ def analizar_dependencia_dinamica(historical_sets, window_size):
     return best_partners
 
 def generar_combinaciones_guiadas(best_partners, numero_a_atraso, num_to_generate):
-    """Genera combinaciones usando lógica de socios y temperatura."""
+    """
+    Genera combinaciones mezclando Fríos (Extremos) y Calientes (Promedios)
+    usando la lógica de socios dinámicos.
+    """
     candidatos = set()
     
-    # --- CORRECCIÓN CRÍTICA AQUÍ TAMBIÉN ---
-    # Convertimos las keys (strings) a float primero, y luego a int para evitar el error '10.0'
-    try:
-        numeros_disponibles = [int(float(n)) for n in numero_a_atraso.keys()]
-    except ValueError:
-        # Fallback si hay algo muy raro
-        numeros_disponibles = list(range(1, 50)) 
-
-    if not numeros_disponibles:
-        return []
-
-    # Ordenar por atraso
-    atrasos_ordenados = sorted(numero_a_atraso.items(), key=lambda item: item[1])
+    # Obtener lista segura de números disponibles
+    try: 
+        nums_disp = [int(float(n)) for n in numero_a_atraso.keys()]
+    except: 
+        nums_disp = list(range(0, 100)) # Fallback
     
-    limit = max(1, len(atrasos_ordenados) // 5)
-    # Extraemos los números convirtiendo seguramente
-    numeros_calientes = [int(float(n[0])) for n in atrasos_ordenados[:limit]]
-    numeros_frios = [int(float(n[0])) for n in atrasos_ordenados[-limit:]]
+    if not nums_disp: return []
+
+    # Clasificar Fríos y Calientes
+    atrasos = sorted(numero_a_atraso.items(), key=lambda x: x[1])
+    limite = max(1, len(atrasos) // 5)
     
-    if not numeros_frios: numeros_frios = numeros_disponibles
-    if not numeros_calientes: numeros_calientes = numeros_disponibles
+    calientes = [int(float(n[0])) for n in atrasos[:limite]] # Poco atraso
+    frios = [int(float(n[0])) for n in atrasos[-limite:]]   # Mucho atraso
+    
+    if not frios: frios = nums_disp
     
     intentos = 0
     max_intentos = num_to_generate * 5
@@ -183,160 +218,121 @@ def generar_combinaciones_guiadas(best_partners, numero_a_atraso, num_to_generat
         intentos += 1
         try:
             combo = []
-            start_node = random.choice(numeros_frios + numeros_calientes)
+            # Empezamos con uno frío o caliente al azar
+            start_node = random.choice(frios + calientes)
             combo.append(start_node)
             
-            partners = [p[0] for p in best_partners.get(start_node, [])]
+            # Añadimos socios (amigos recientes)
+            socios = [p[0] for p in best_partners.get(start_node, [])]
+            if socios:
+                num_socios = random.randint(1, min(2, len(socios)))
+                combo.extend(random.sample(socios[:5], num_socios))
             
-            if partners:
-                n_socios = random.randint(1, min(2, len(partners)))
-                combo.extend(random.sample(partners[:5], n_socios))
-            
+            # Rellenamos el resto
             while len(combo) < 6:
-                eleccion = random.choice(numeros_calientes + numeros_disponibles)
-                if eleccion not in combo:
-                    combo.append(eleccion)
+                seleccion = random.choice(calientes + nums_disp)
+                if seleccion not in combo:
+                    combo.append(seleccion)
             
-            final_combo = tuple(sorted(combo[:6]))
-            if len(final_combo) == 6:
-                candidatos.add(final_combo)
-                
-        except (IndexError, ValueError):
-             pass
+            # Guardamos
+            candidatos.add(tuple(sorted(combo[:6])))
+        except:
+            pass
             
     return list(candidatos)
 
-def puntuar_y_rankear(combinations, numero_a_atraso, numero_a_frecuencia, total_atraso_dataset, atraso_counts, reglas):
-    """Asigna puntuación final para el ranking."""
+def puntuar_y_rankear(combinations, numero_a_atraso, numero_a_frecuencia, total_atraso, atraso_counts, reglas):
+    """Aplica la Gaussiana y ordena las mejores jugadas."""
     scored_combinations = []
-    
-    # Manejo seguro de llaves
-    atraso_counts_int = {int(float(k)): v for k, v in atraso_counts.items()}
-    
-    means = {key: stats['mean'] for key, stats in reglas.items() if stats and 'mean' in stats}
-    stds = {key: stats['std'] for key, stats in reglas.items() if stats and 'std' in stats}
+    means = {k: v['mean'] for k, v in reglas.items() if 'mean' in v}
+    stds = {k: v['std'] for k, v in reglas.items() if 'std' in v}
     
     for combo in combinations:
-        metricas = calcular_metricas(list(combo), numero_a_atraso, numero_a_frecuencia, total_atraso_dataset)
-        if metricas is None: continue
+        m = calcular_metricas(list(combo), numero_a_atraso, numero_a_frecuencia, total_atraso)
+        if m is None: continue
         
         score = 100.0
-        for metrica_nombre in ['suma', 'cv_atraso', 'cv_frecuencia']:
-            valor = metricas.get(metrica_nombre, 0)
-            mean = means.get(metrica_nombre, 0)
-            std = stds.get(metrica_nombre, 1)
-            
+        # Aplicar Campana de Gauss (Castigar extremos en Suma y Varianza)
+        for k in ['suma', 'cv_atraso', 'cv_frecuencia']:
+            val, mean, std = m.get(k, 0), means.get(k, 0), stds.get(k, 1)
             if std > 0:
-                diff = abs(valor - mean)
-                factor = np.exp(-0.5 * (diff / std) ** 2)
-                score *= (0.5 + factor)
+                diff = abs(val - mean)
+                score *= (0.5 + np.exp(-0.5 * (diff / std) ** 2))
 
-        atrasos_combo = [numero_a_atraso.get(str(n), 0) for n in combo]
-        total_atraso_combo = sum(atrasos_combo)
-        score += total_atraso_combo * 0.5 
+        # Bonificación ligera por atraso acumulado (Factor escasez)
+        total_atraso_combo = sum(numero_a_atraso.get(str(n), 0) for n in combo)
+        score += total_atraso_combo * 0.5
         
-        metricas['Puntuación'] = score
-        metricas['Combinación'] = ' - '.join(map(str, combo))
-        scored_combinations.append(metricas)
+        m['Puntuación'] = score
+        m['Combinación'] = ' - '.join(map(str, combo))
+        scored_combinations.append(m)
 
     return sorted(scored_combinations, key=lambda x: x["Puntuación"], reverse=True)
 
-# --- ESTRUCTURA DE LA APLICACIÓN STREAMLIT ---
+# --- 3. INTERFAZ GRÁFICA STREAMLIT ---
 
-st.set_page_config(layout="wide", page_title="Agente Predictivo Dinámico")
-st.title("🤖 Agente Predictivo con Dependencia Dinámica v2.1")
+st.set_page_config(layout="wide", page_title="Agente Dinámico v2.3")
+st.title("🤖 Agente Predictivo v2.3 (Full + Robust)")
 
-# --- 1. Carga de Archivos ---
-st.header("1. Cargar Archivos")
+# --- Carga ---
+st.header("1. Cargar Archivos (Separa por juego)")
 col1, col2 = st.columns(2)
-with col1:
-    data_file = st.file_uploader("Sube archivo DATOS (CSV: Numero, Atraso, Frecuencia)", type="csv")
-with col2:
-    history_file = st.file_uploader("Sube archivo HISTORIAL (CSV o XLSX)", type=["csv", "xlsx"])
+f_data = col1.file_uploader("Datos (CSV: Numero, Atraso, Frecuencia)", type="csv")
+f_hist = col2.file_uploader("Historial (CSV o XLSX)", type=["csv", "xlsx"])
 
-if data_file and history_file:
-    data_tuple = load_data_files(data_file, history_file)
-    if data_tuple:
-        (st.session_state.numero_a_atraso, st.session_state.numero_a_frecuencia, 
-         st.session_state.atraso_counts, st.session_state.total_atraso, 
-         st.session_state.historical_sets) = data_tuple
+if f_data and f_hist:
+    # Cargar datos
+    datos = load_data_files(f_data, f_hist)
+    
+    if datos:
+        (st.session_state.na, st.session_state.nf, st.session_state.ac, st.session_state.ta, st.session_state.hs) = datos
 
-        # --- 2. Configuración de Parámetros ---
-        st.header("2. Configurar Parámetros")
-        col_param1, col_param2, col_param3 = st.columns(3)
-        with col_param1:
-            num_candidates = st.number_input("Nº Candidatos a Generar", 1000, 200000, 10000, step=1000)
-        with col_param2:
-            window_size = st.slider("Ventana Análisis Dinámico (sorteos)", 10, 300, 50)
-        with col_param3:
-            top_n = st.number_input("Top Combinaciones a Mostrar", 5, 100, 15)
+        # --- Parámetros ---
+        st.header("2. Configuración")
+        c_p1, c_p2, c_p3 = st.columns(3)
+        with c_p1: n_candidatos = st.number_input("Candidatos a generar", 1000, 500000, 50000)
+        with c_p2: ventana = st.slider("Ventana Dinámica (Sorteos)", 10, 200, 50)
+        with c_p3: top_n = st.number_input("Top a mostrar", 5, 100, 15)
 
-        # --- 3. Ejecución ---
-        st.header("3. Resultados")
-        if st.button("🚀 Ejecutar Análisis"):
-            if not st.session_state.historical_sets:
-                st.error("El historial está vacío. Revisa el archivo.")
-            else:
-                with st.spinner("Analizando patrones y generando predicciones..."):
-                    start_time = time.time()
+        # --- Ejecución ---
+        st.header("3. Análisis")
+        if st.button("🚀 Ejecutar Predicción"):
+            with st.spinner("Entrenando agente y simulando escenarios..."):
+                start_time = time.time()
+                
+                # 1. Aprender del Historial (Global)
+                reglas = analizar_historial_global(st.session_state.hs, st.session_state.na, st.session_state.nf, st.session_state.ta)
+                
+                # 2. Aprender del Momento Actual (Dinámico)
+                socios = analizar_dependencia_dinamica(st.session_state.hs, ventana)
+                
+                # 3. Generar
+                candidatos = generar_combinaciones_guiadas(socios, st.session_state.na, n_candidatos)
+                
+                # 4. Filtrar
+                finalistas = []
+                for c in candidatos:
+                    m = calcular_metricas(list(c), st.session_state.na, st.session_state.nf, st.session_state.ta)
+                    if m:
+                        # Filtros básicos de validación estadística
+                        if (reglas['suma']['range'][0] <= m['suma'] <= reglas['suma']['range'][1]) and \
+                           (m['pares'] in reglas['pares']['values']) and \
+                           (reglas['cv_frecuencia']['range'][0] <= m['cv_frecuencia'] <= reglas['cv_frecuencia']['range'][1]):
+                            finalistas.append(list(c))
+                
+                # 5. Rankear
+                if finalistas:
+                    ranking = puntuar_y_rankear(finalistas, st.session_state.na, st.session_state.nf, st.session_state.ta, st.session_state.ac, reglas)
                     
-                    try:
-                        # 1. Reglas Globales
-                        reglas = analizar_historial_global(
-                            st.session_state.historical_sets, st.session_state.numero_a_atraso,
-                            st.session_state.numero_a_frecuencia, st.session_state.total_atraso
-                        )
-                        
-                        # 2. Dependencias Dinámicas
-                        best_partners = analizar_dependencia_dinamica(st.session_state.historical_sets, window_size)
-                        
-                        # 3. Generación
-                        candidatos = generar_combinaciones_guiadas(best_partners, st.session_state.numero_a_atraso, num_candidates)
-                        
-                        # 4. Filtrado Estricto
-                        combinaciones_potentes = []
-                        for combo in candidatos:
-                            m = calcular_metricas(list(combo), st.session_state.numero_a_atraso, st.session_state.numero_a_frecuencia, st.session_state.total_atraso)
-                            if m is None: continue
-                            
-                            if not (reglas['suma']['range'][0] <= m['suma'] <= reglas['suma']['range'][1]): continue
-                            if m['pares'] not in reglas['pares']['values']: continue
-                            if not (reglas['cv_frecuencia']['range'][0] <= m['cv_frecuencia'] <= reglas['cv_frecuencia']['range'][1]): continue
-                            
-                            combinaciones_potentes.append(list(combo))
-                        
-                        st.info(f"De {len(candidatos)} candidatos, {len(combinaciones_potentes)} pasaron los filtros.")
-
-                        # 5. Ranking
-                        if combinaciones_potentes:
-                            ranked_results = puntuar_y_rankear(
-                                combinaciones_potentes, st.session_state.numero_a_atraso,
-                                st.session_state.numero_a_frecuencia, st.session_state.total_atraso,
-                                st.session_state.atraso_counts, reglas
-                            )
-                            
-                            st.success(f"Completado en {time.time() - start_time:.2f}s")
-                            st.subheader(f"🏆 Top {top_n} Recomendaciones")
-                            
-                            df_resultados = pd.DataFrame(ranked_results[:top_n])
-                            
-                            rename_map = {
-                                "Puntuación": "Score",
-                                "Combinación": "Números",
-                                "suma": "Suma",
-                                "cv_atraso": "CV Atraso",
-                                "cv_frecuencia": "CV Frec",
-                                "calculo_especial": "Calc. Esp."
-                            }
-                            cols_existentes = [c for c in rename_map.keys() if c in df_resultados.columns]
-                            df_show = df_resultados[cols_existentes].rename(columns=rename_map)
-                            
-                            st.dataframe(df_show, use_container_width=True)
-                        else:
-                            st.warning("Ninguna combinación pasó los filtros estrictos. Intenta relajar los filtros o aumentar candidatos.")
+                    st.success(f"Análisis finalizado en {time.time() - start_time:.2f}s")
+                    st.subheader(f"🏆 Top {top_n} Combinaciones Recomendadas")
                     
-                    except Exception as e:
-                        st.error(f"Error inesperado: {e}")
-
+                    # Mostrar tabla bonita
+                    df = pd.DataFrame(ranking[:top_n])
+                    cols_mostrar = ['Puntuación', 'Combinación', 'suma', 'cv_atraso', 'cv_frecuencia']
+                    df_show = df[cols_mostrar].rename(columns={'suma': 'Suma', 'cv_atraso': 'CV Atraso', 'cv_frecuencia': 'CV Frec'})
+                    st.dataframe(df_show, use_container_width=True)
+                else:
+                    st.warning("No se encontraron combinaciones que pasen los filtros estrictos. Intenta aumentar los candidatos o la ventana.")
 else:
-    st.info("👋 Sube los archivos para comenzar.")
+    st.info("Por favor, sube los archivos para comenzar.")
