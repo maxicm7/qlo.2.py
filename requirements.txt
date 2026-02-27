@@ -1,5 +1,8 @@
-streamlit 
+streamlit
 pandas
 numpy
-collections
-time
+scikit-learn
+xgboost
+joblib
+openpyxl
+deap
