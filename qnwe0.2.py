@@ -1,4 +1,4 @@
-# Agente Predictivo Homeostático con Dependencia Dinámica v2.3 (FINAL)
+# Agente Predictivo Homeostático con Dependencia Dinámica v2.3 (FINAL CORREGIDO)
 # --------------------------------------------------------------------
 # ANTES DE USAR: Asegúrate de instalar las librerías necesarias.
 # En tu terminal: pip install streamlit pandas numpy scikit-learn openpyxl
@@ -14,7 +14,7 @@ import time
 # Ignorar advertencias de pandas
 warnings.filterwarnings("ignore")
 
-# --- 1. FUNCIONES DE CARGA ROBUSTA (Corregido: Separadores y Nombres) ---
+# --- 1. FUNCIONES DE CARGA ROBUSTA ---
 
 @st.cache_data
 def load_data_files(data_file, history_file):
@@ -22,7 +22,7 @@ def load_data_files(data_file, history_file):
     Carga y procesa ambos archivos.
     - Detecta automáticamente separadores (; o ,).
     - Normaliza nombres de columnas (Numero/Número/Num).
-    - Corrige errores de formato numérico (10.0 -> 10).
+    - Elimina columnas duplicadas para evitar errores de Series vs DataFrame.
     """
     numero_a_atraso, numero_a_frecuencia, atraso_counts, total_atraso_dataset, historical_sets = {}, {}, {}, 0, []
     
@@ -39,7 +39,7 @@ def load_data_files(data_file, history_file):
             df = pd.read_csv(data_file, sep=';', encoding='utf-8-sig')
 
         # 2. Normalizar nombres de columnas (quitar espacios, minúsculas, tildes)
-        df.columns = df.columns.str.strip().str.lower() \
+        df.columns = df.columns.astype(str).str.strip().str.lower() \
             .str.replace('ú', 'u').str.replace('ó', 'o').str.replace('é', 'e').str.replace('á', 'a').str.replace('í', 'i')
         
         # 3. Mapeo de sinónimos para encontrar las columnas correctas
@@ -50,16 +50,20 @@ def load_data_files(data_file, history_file):
         }
         df = df.rename(columns=col_map)
 
+        # ✨ ELIMINAR COLUMNAS DUPLICADAS (Solución al error de 'arg must be a list...')
+        df = df.loc[:, ~df.columns.duplicated()]
+
         # 4. Si no encuentra nombres, intentar por posición (Col 1, 2, 3)
         if 'Numero' not in df.columns:
             if len(df.columns) >= 3:
                 st.warning("⚠️ No se detectaron encabezados estándar. Asumiendo orden: Col1=Numero, Col2=Atraso, Col3=Frecuencia.")
-                df.columns = ['Numero', 'Atraso', 'Frecuencia'] + list(df.columns[3:])
+                nuevas_cols = ['Numero', 'Atraso', 'Frecuencia'] + [f"Extra_{i}" for i in range(len(df.columns) - 3)]
+                df.columns = nuevas_cols
             else:
                 st.error(f"❌ El archivo debe tener columnas: Numero, Atraso, Frecuencia. Se detectaron: {list(df.columns)}")
                 return None
 
-        # 5. Limpieza de datos (Evitar error '10.0' y textos)
+        # 5. Limpieza de datos
         df['Numero'] = pd.to_numeric(df['Numero'], errors='coerce')
         df = df.dropna(subset=['Numero']) # Borrar filas vacías
         df['Numero'] = df['Numero'].astype(int).astype(str) # Convertir a entero y luego texto limpio
