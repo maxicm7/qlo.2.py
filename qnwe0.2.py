@@ -296,7 +296,7 @@ if f_data and f_hist:
         c_p1, c_p2, c_p3 = st.columns(3)
         with c_p1: n_candidatos = st.number_input("Candidatos a generar", 1000, 500000, 50000)
         with c_p2: ventana = st.slider("Ventana Dinámica (Sorteos)", 10, 200, 50)
-        with c_p3: top_n = st.number_input("Top a mostrar", 5, 100, 15)
+        with c_p3: top_n = st.number_input("Top a mostrar", 5, 250, 15)
 
         # --- Ejecución ---
         st.header("3. Análisis")
