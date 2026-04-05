@@ -1,6 +1,7 @@
-# Agente Predictivo Homeostático con Dependencia Dinámica v2.4 (GUMBEL + GEMINI + CHAT)
+# Agente Predictivo Homeostático con Dependencia Dinámica v2.4 (FINAL - GUMBEL + GEMINI + CHAT + SESSION_STATE)
 # --------------------------------------------------------------------
 # INSTALACIÓN: pip install streamlit pandas numpy scikit-learn openpyxl google-generativeai
+# EJECUCIÓN: streamlit run agente_predictivo_v2.4.py
 
 import streamlit as st
 import pandas as pd
@@ -11,7 +12,7 @@ import warnings
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-# ⚠️ Import condicional para Gemini (evita errores si no se instala)
+# ⚠️ Import condicional para Gemini
 try:
     import google.generativeai as genai
     GEMINI_AVAILABLE = True
@@ -33,35 +34,30 @@ def gumbel_probability(delay, mu, beta, direction='upper'):
     if beta <= 0:
         beta = 1.0
     z = (delay - mu) / beta
-    cdf = np.exp(-np.exp(-z))  # CDF de Gumbel
+    cdf = np.exp(-np.exp(-z))
     return 1 - cdf if direction == 'upper' else cdf
 
 def calcular_tension_gumbel(numero, numero_a_atraso, atraso_counts, factor_escala=1.5):
-    """
-    Calcula el score de tensión Gumbel para un número.
-    Retorna: (tension_score, mu, beta)
-    """
+    """Calcula el score de tensión Gumbel para un número."""
     delay_actual = numero_a_atraso.get(str(numero), 0)
     
-    # Calcular parámetros desde el dataset
     if atraso_counts:
         delays = list(atraso_counts.keys())
         weights = list(atraso_counts.values())
         mu = np.average(delays, weights=weights)
         sigma = np.sqrt(np.average([(d - mu)**2 for d in delays], weights=weights))
-        beta = sigma * np.sqrt(6) / np.pi  # Relación teórica Gumbel
+        beta = sigma * np.sqrt(6) / np.pi
         beta = max(beta, 1.0)
     else:
-        mu, beta = 10, 5  # Defaults seguros
+        mu, beta = 10, 5
     
-    # Probabilidad de que el número "rompa" su atraso (tensión alta)
     tension_prob = gumbel_probability(delay_actual, mu, beta, direction='upper')
     tension_score = min(1.0, tension_prob * factor_escala)
     
     return tension_score, mu, beta
 
 # ============================================================================
-# 📁 2. CARGA ROBUSTA DE ARCHIVOS (Sin cambios mayores)
+# 📁 2. CARGA ROBUSTA DE ARCHIVOS
 # ============================================================================
 
 @st.cache_data
@@ -175,10 +171,9 @@ def calcular_metricas(combinacion, numero_a_atraso, numero_a_frecuencia, total_a
         'pares': sum(1 for n in combo_valido if n % 2 == 0),
         'cv_frecuencia': cv_f,
         'cv_atraso': cv_a,
-        'calculo_especial': total_atraso_dataset + 40 - sum(atrasos)  # Fórmula clave del sistema
+        'calculo_especial': total_atraso_dataset + 40 - sum(atrasos)
     }
     
-    # ➕ INTEGRACIÓN GUMBEL: Score de tensión acumulada
     if incluir_gumbel and mu_gumbel is not None and beta_gumbel is not None:
         tension_scores = [gumbel_probability(a, mu_gumbel, beta_gumbel, direction='upper') for a in atrasos]
         resultado.update({
@@ -246,13 +241,11 @@ def generar_lote_combinaciones(params):
     if not nums_disp: 
         return []
 
-    # Clasificación estratégica
     atrasos = sorted(numero_a_atraso.items(), key=lambda x: x[1])
     limite = max(1, len(atrasos) // 5)
     calientes = [int(float(n[0])) for n in atrasos[:limite]]
     frios = [int(float(n[0])) for n in atrasos[-limite:]]
     
-    # ➕ Priorizar números en tensión Gumbel alta
     if numero_a_tension:
         tension_high = [n for n, t in numero_a_tension.items() if t > 0.7]
         frios = list(set(frios + tension_high))
@@ -268,12 +261,10 @@ def generar_lote_combinaciones(params):
             start_node = random.choice(pool_inicio)
             combo.append(start_node)
             
-            # Añadir socios dinámicos
             socios = [p[0] for p in best_partners.get(start_node, []) if str(p[0]) in numero_a_atraso]
             if socios:
                 combo.extend(random.sample(socios[:5], random.randint(1, min(2, len(socios)))))
             
-            # Rellenado estratégico con sesgo Gumbel
             while len(combo) < 6:
                 if random.random() < 0.7 and calientes:
                     seleccion = random.choice(calientes)
@@ -374,18 +365,14 @@ def puntuar_y_rankear(combinations, numero_a_atraso, numero_a_frecuencia, total_
             continue
         
         score = 100.0
-        # Campana de Gauss para homeostasis
         for k in ['suma', 'cv_atraso', 'cv_frecuencia']:
             val, mean, std = m.get(k, 0), means.get(k, 0), stds.get(k, 1)
             if std > 0:
                 score *= (0.5 + np.exp(-0.5 * (abs(val - mean) / std) ** 2))
 
-        # Bonificación por atraso acumulado
         score += sum(numero_a_atraso.get(str(n), 0) for n in combo) * 0.5
         
-        # ➕ BONIFICACIÓN GUMBEL CRUZADA CON CÁLCULO ESPECIAL
         if mu_gumbel is not None and 'tension_gumbel_acumulada' in m:
-            # Cruzar: (TotalAtraso+40-SumaAtrasos) × TensiónGumbel
             factor_cruce = m['calculo_especial'] / max(1, total_atraso + 40)
             tension_bonus = m['tension_gumbel_acumulada'] * 25 * peso_gumbel * (1 + factor_cruce)
             score += tension_bonus
@@ -398,7 +385,7 @@ def puntuar_y_rankear(combinations, numero_a_atraso, numero_a_frecuencia, total_
     return sorted(scored, key=lambda x: x["Puntuación"], reverse=True)
 
 # ============================================================================
-# 🤖 4. INTEGRACIÓN GEMINI API (LLM para análisis cruzado)
+# 🤖 4. INTEGRACIÓN GEMINI API
 # ============================================================================
 
 def configurar_gemini(api_key):
@@ -412,14 +399,11 @@ def configurar_gemini(api_key):
         return False, f"❌ Error: {e}"
 
 def analizar_con_gemini(combinaciones_top, contexto_sistema, api_key, modelo="gemini-2.0-flash"):
-    """
-    Gemini analiza correlaciones dinámicas + Gumbel + fórmula especial para seleccionar la más probable.
-    """
+    """Gemini analiza correlaciones dinámicas + Gumbel + fórmula especial."""
     if not GEMINI_AVAILABLE:
         return "⚠️ Instala google-generativeai para usar esta función"
     
     try:
-        # Preparar datos para el prompt
         df_top = pd.DataFrame(combinaciones_top[:15])[['Combinación', 'Puntuación', 'suma', 'cv_atraso', 
                                                         'cv_frecuencia', 'calculo_especial', 
                                                         'tension_gumbel_promedio', 'tension_gumbel_acumulada']] \
@@ -523,6 +507,30 @@ def responder_chat_gemini(pregunta, contexto_datos, resultados_recientes, api_ke
 # ============================================================================
 
 def main():
+    # 🔥 INICIALIZAR SESSION_STATE PARA PERSISTENCIA (CRÍTICO)
+    if 'ranking_completo' not in st.session_state:
+        st.session_state.ranking_completo = None
+    if 'ranking_top' not in st.session_state:
+        st.session_state.ranking_top = None
+    if 'df_resultados' not in st.session_state:
+        st.session_state.df_resultados = None
+    if 'ultimo_analisis_gemini' not in st.session_state:
+        st.session_state.ultimo_analisis_gemini = None
+    if 'numero_a_tension' not in st.session_state:
+        st.session_state.numero_a_tension = {}
+    if 'gumbel_params' not in st.session_state:
+        st.session_state.gumbel_params = (10, 5)
+    if 'contexto_app' not in st.session_state:
+        st.session_state.contexto_app = {}
+    if 'gemini_configured' not in st.session_state:
+        st.session_state.gemini_configured = False
+    if 'datos_cargados' not in st.session_state:
+        st.session_state.datos_cargados = False
+    if 'chat_history' not in st.session_state:
+        st.session_state.chat_history = []
+    if 'parametros_generacion' not in st.session_state:
+        st.session_state.parametros_generacion = {'ventana': 50, 'factor_escala': 1.5, 'peso_gumbel': 0.3}
+    
     st.title("🤖 Agente Predictivo v2.4")
     st.markdown("*Homeostasis + Dependencia Dinámica + Gumbel + Gemini + Chat*")
     
@@ -535,12 +543,10 @@ def main():
         api_key = st.text_input("API Key", type="password", help="Tu API key paga de Google AI Studio")
         modelo_gemini = st.selectbox("Modelo", ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"], index=0)
         
-        gemini_status = ""
         if api_key:
             ok, msg = configurar_gemini(api_key)
-            gemini_status = "✅" if ok else "❌"
-            st.caption(f"{gemini_status} {msg}")
             st.session_state.gemini_configured = ok
+            st.caption(f"{'✅' if ok else '❌'} {msg}")
         else:
             st.session_state.gemini_configured = False
             st.caption("⚪ Ingresa tu API Key para activar IA")
@@ -554,6 +560,10 @@ def main():
         peso_gumbel = st.slider("Peso Gumbel en scoring", 0.0, 1.0, 0.3, 0.1,
                                help="Importancia relativa de la tensión Gumbel vs homeostasis")
         
+        # Guardar parámetros en session_state
+        st.session_state.parametros_generacion['factor_escala'] = factor_escala
+        st.session_state.parametros_generacion['peso_gumbel'] = peso_gumbel
+        
         st.divider()
         
         # 🎯 Parámetros de generación
@@ -561,6 +571,8 @@ def main():
         n_candidatos = st.number_input("Candidatos", 1000, 500000, 50000)
         ventana = st.slider("Ventana dinámica", 10, 200, 50)
         top_n = st.number_input("Top a mostrar", 5, 250, 15)
+        
+        st.session_state.parametros_generacion['ventana'] = ventana
         
         st.info("""
         **✨ v2.4 Features**
@@ -574,14 +586,11 @@ def main():
     st.header("1. 📁 Cargar Archivos")
     col1, col2 = st.columns(2)
     with col1:
-        f_data = st.file_uploader("Datos (CSV: Numero,Atraso,Frecuencia)", type="csv")
+        f_data = st.file_uploader("Datos (CSV: Numero,Atraso,Frecuencia)", type="csv", key="uploader_data")
     with col2:
-        f_hist = st.file_uploader("Historial (CSV/XLSX)", type=["csv", "xlsx"])
+        f_hist = st.file_uploader("Historial (CSV/XLSX)", type=["csv", "xlsx"], key="uploader_hist")
     
     if f_data and f_hist:
-        if 'datos_cargados' not in st.session_state:
-            st.session_state.datos_cargados = False
-        
         if not st.session_state.datos_cargados:
             with st.spinner("🔄 Procesando archivos..."):
                 datos = load_data_files(f_data, f_hist)
@@ -598,9 +607,14 @@ def main():
         # === PANEL DE EJECUCIÓN ===
         st.header("2. 🚀 Ejecutar Análisis")
         
-        if st.button("▶️ Ejecutar Predicción Completa"):
+        if st.button("▶️ Ejecutar Predicción Completa", key="btn_ejecutar"):
             with st.spinner("🔄 Calculando Gumbel + Homeostasis + Generando..."):
                 start = time.time()
+                
+                # Recuperar parámetros
+                factor_escala = st.session_state.parametros_generacion['factor_escala']
+                peso_gumbel = st.session_state.parametros_generacion['peso_gumbel']
+                ventana = st.session_state.parametros_generacion['ventana']
                 
                 # 1. Parámetros Gumbel del dataset
                 delays = list(st.session_state.ac.keys())
@@ -619,6 +633,7 @@ def main():
                         numero_a_tension[n_int] = tension
                     except:
                         continue
+                st.session_state.numero_a_tension = numero_a_tension
                 
                 # 3. Homeostasis global
                 reglas = analizar_historial_global(st.session_state.hs, st.session_state.na, st.session_state.nf, st.session_state.ta)
@@ -651,68 +666,103 @@ def main():
                         finalistas, st.session_state.na, st.session_state.nf, st.session_state.ta,
                         st.session_state.ac, reglas, mu, beta, peso_gumbel)
                     
+                    # 🔥 GUARDAR EN SESSION_STATE (CRÍTICO PARA QUE NO SE PIERDA)
+                    st.session_state.ranking_completo = ranking
+                    st.session_state.ranking_top = ranking[:top_n]
+                    st.session_state.df_resultados = pd.DataFrame(ranking)
+                    st.session_state.gumbel_params = (mu, beta)
+                    st.session_state.numero_a_tension = numero_a_tension
+                    st.session_state.contexto_app = {
+                        'total_numeros': len(st.session_state.na),
+                        'total_atraso': st.session_state.ta,
+                        'gumbel_mu': mu, 'gumbel_beta': beta,
+                        'ventana': ventana, 'factor_escala': factor_escala,
+                        'top_combis': ranking[:10]
+                    }
+                    
                     elapsed = time.time() - start
                     st.success(f"✅ Completado en {elapsed:.2f}s | {len(ranking):,} combinaciones válidas")
                     
-                    # === MOSTRAR RESULTADOS ===
+                    # === MOSTRAR RESULTADOS (DESDE SESSION_STATE) ===
                     st.subheader(f"🏆 Top {top_n} Recomendadas")
                     
-                    df = pd.DataFrame(ranking)
-                    cols = ['Puntuación', 'Combinación', 'suma', 'cv_atraso', 'cv_frecuencia', 'calculo_especial']
-                    if 'tension_gumbel_promedio' in df.columns:
-                        cols += ['tension_gumbel_promedio', 'tension_gumbel_max', 'numeros_en_tension']
+                    df = st.session_state.df_resultados
                     
-                    df_show = df[cols].copy()
-                    df_show.columns = ['Puntuación', 'Combinación', 'Suma', 'CV Atraso', 'CV Frec', 'Calc.Especial'] + \
-                                     (['Tens.Gumbel↑', 'Tens.Max', 'N°Tensión'] if 'tension_gumbel_promedio' in df.columns else [])
-                    
-                    # Formateo
-                    for c in df_show.select_dtypes(include=[np.number]).columns:
-                        if 'Puntuación' in c:
-                            df_show[c] = df_show[c].round(2)
-                        elif 'Tens' in c or 'CV' in c:
-                            df_show[c] = df_show[c].round(3)
+                    if df is not None and not df.empty:
+                        cols = ['Puntuación', 'Combinación', 'suma', 'cv_atraso', 'cv_frecuencia', 'calculo_especial']
+                        if 'tension_gumbel_promedio' in df.columns:
+                            cols += ['tension_gumbel_promedio', 'tension_gumbel_max', 'numeros_en_tension']
+                        
+                        df_show = df[cols].copy()
+                        df_show.columns = ['Puntuación', 'Combinación', 'Suma', 'CV Atraso', 'CV Frec', 'Calc.Especial'] + \
+                                         (['Tens.Gumbel↑', 'Tens.Max', 'N°Tensión'] if 'tension_gumbel_promedio' in df.columns else [])
+                        
+                        for c in df_show.select_dtypes(include=[np.number]).columns:
+                            if 'Puntuación' in c:
+                                df_show[c] = df_show[c].round(2)
+                            elif 'Tens' in c or 'CV' in c:
+                                df_show[c] = df_show[c].round(3)
+                            else:
+                                df_show[c] = df_show[c].round(1)
+                        
+                        if len(df) > 100:
+                            st.warning(f"📌 Mostrando 100 de {len(df):,}. Usa descarga para el completo.")
+                            st.dataframe(df_show.head(100), use_container_width=True)
                         else:
-                            df_show[c] = df_show[c].round(1)
-                    
-                    if len(df) > 100:
-                        st.warning(f"📌 Mostrando 100 de {len(df):,}. Usa descarga para el completo.")
-                        st.dataframe(df_show.head(100), use_container_width=True)
-                    else:
-                        st.dataframe(df_show, use_container_width=True)
-                    
-                    # 💾 Descarga CSV
-                    df_exp = df[cols].copy()
-                    df_exp.columns = ['Puntuacion', 'Combinacion', 'Suma', 'CV_Atraso', 'CV_Frecuencia', 'Calculo_Especial'] + \
-                                    (['Tension_Gumbel_Prom', 'Tension_Gumbel_Max', 'Numeros_en_Tension'] if 'tension_gumbel_promedio' in df.columns else [])
-                    for c in df_exp.select_dtypes(include=[np.number]).columns:
-                        df_exp[c] = df_exp[c].round(4)
-                    
-                    csv = df_exp.to_csv(index=False, encoding='utf-8-sig')
-                    st.download_button(
-                        label=f"📥 Descargar {len(df):,} combinaciones (CSV)",
-                        data=csv,
-                        file_name=f"predicciones_v2.4_{len(df):,}.csv",
-                        mime="text/csv"
-                    )
-                    
-                    # === 🤖 ANÁLISIS CON GEMINI ===
-                    if st.session_state.get('gemini_configured', False):
-                        st.divider()
-                        st.subheader("🤖 Análisis Inteligente con Gemini")
+                            st.dataframe(df_show, use_container_width=True)
                         
-                        contexto = f"""
-                        • Dataset: {len(st.session_state.na)} números | Atraso total: {st.session_state.ta}
-                        • Gumbel: μ={mu:.2f}, β={beta:.2f} | Factor escala: {factor_escala}
-                        • Ventana dinámica: {ventana} sorteos | Peso Gumbel: {peso_gumbel}
-                        • Números con tensión >0.7: {sum(1 for t in numero_a_tension.values() if t > 0.7)}
-                        • Fórmula activa: CálculoEspecial = {st.session_state.ta} + 40 - Σ(AtrasosCombo)
-                        """
+                        # 💾 Descarga CSV
+                        df_exp = df[cols].copy()
+                        df_exp.columns = ['Puntuacion', 'Combinacion', 'Suma', 'CV_Atraso', 'CV_Frecuencia', 'Calculo_Especial'] + \
+                                        (['Tension_Gumbel_Prom', 'Tension_Gumbel_Max', 'Numeros_en_Tension'] if 'tension_gumbel_promedio' in df.columns else [])
+                        for c in df_exp.select_dtypes(include=[np.number]).columns:
+                            df_exp[c] = df_exp[c].round(4)
                         
-                        if st.button("🔍 Analizar con Gemini"):
-                            with st.spinner("🤖 Gemini cruzando Gumbel + correlaciones + homeostasis..."):
-                                analisis = analizar_con_gemini(ranking, contexto, api_key, modelo_gemini)
-                                st.markdown(analisis)
+                        csv = df_exp.to_csv(index=False, encoding='utf-8-sig')
+                        st.download_button(
+                            label=f"📥 Descargar {len(df):,} combinaciones (CSV)",
+                            data=csv,
+                            file_name=f"predicciones_v2.4_{len(df):,}.csv",
+                            mime="text/csv"
+                        )
+                        
+                        # === 🤖 ANÁLISIS CON GEMINI (CORREGIDO - USA SESSION_STATE) ===
+                        if st.session_state.get('gemini_configured', False):
+                            st.divider()
+                            st.subheader("🤖 Análisis Inteligente con Gemini")
+                            
+                            # Verificar que existen resultados guardados
+                            if st.session_state.get('ranking_completo'):
+                                contexto = f"""
+                                • Dataset: {len(st.session_state.na)} números | Atraso total: {st.session_state.ta}
+                                • Gumbel: μ={st.session_state.gumbel_params[0]:.2f}, β={st.session_state.gumbel_params[1]:.2f}
+                                • Factor escala: {factor_escala} | Peso Gumbel: {peso_gumbel}
+                                • Ventana dinámica: {ventana} sorteos
+                                • Números con tensión >0.7: {sum(1 for t in st.session_state.numero_a_tension.values() if t > 0.7)}
+                                • Fórmula: CálculoEspecial = {st.session_state.ta} + 40 - Σ(AtrasosCombo)
+                                """
+                                
+                                if st.button("🔍 Analizar con Gemini", key="btn_gemini_analisis"):
+                                    with st.spinner("🤖 Gemini cruzando Gumbel + correlaciones + homeostasis..."):
+                                        # 🔥 USAR DATOS DE SESSION_STATE, NO VARIABLES LOCALES
+                                        analisis = analizar_con_gemini(
+                                            st.session_state.ranking_completo,
+                                            contexto, 
+                                            api_key, 
+                                            modelo_gemini
+                                        )
+                                        
+                                        # Guardar análisis para que persista
+                                        st.session_state.ultimo_analisis_gemini = analisis
+                                        
+                                        # Mostrar resultado
+                                        st.markdown("### 📋 Resultado del Análisis")
+                                        st.markdown(analisis)
+                                        
+                                        # Botón para copiar
+                                        st.code(analisis, language="markdown")
+                            else:
+                                st.warning("⚠️ Primero ejecuta la predicción para generar combinaciones antes de usar Gemini.")
                     
                     # === 📊 ESTADÍSTICAS ===
                     st.divider()
@@ -727,33 +777,22 @@ def main():
                         else:
                             st.metric("Gumbel", "N/A")
                     
-                    # Guardar para chat
-                    st.session_state.ultimos_resultados = ranking[:20]
-                    st.session_state.contexto_app = {
-                        'total_numeros': len(st.session_state.na),
-                        'total_atraso': st.session_state.ta,
-                        'gumbel_mu': mu, 'gumbel_beta': beta,
-                        'ventana': ventana, 'factor_escala': factor_escala,
-                        'top_combis': ranking[:10]
-                    }
-                    
                 else:
                     st.warning("⚠️ Sin combinaciones válidas. Prueba: ↑ candidatos, ↑ ventana, o ajustar parámetros Gumbel.")
     
     else:
         st.info("👆 Sube ambos archivos para comenzar")
     
-    # === 💬 CHAT CONTEXTUAL ===
+    # === 💬 CHAT CONTEXTUAL (CORREGIDO - USA SESSION_STATE) ===
     st.divider()
     st.header("💬 Chat con el Agente")
     
-    if "chat_history" not in st.session_state:
-        st.session_state.chat_history = []
-    
+    # Mostrar historial de chat
     for msg in st.session_state.chat_history:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
     
+    # Input del chat
     if prompt := st.chat_input("Pregunta sobre datos, metodología o resultados..."):
         st.session_state.chat_history.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
@@ -762,22 +801,32 @@ def main():
         with st.chat_message("assistant"):
             if st.session_state.get('gemini_configured', False) and st.session_state.datos_cargados:
                 with st.spinner("🤖 Procesando..."):
+                    # Construir contexto desde session_state
+                    ctx_params = st.session_state.gumbel_params
                     ctx = f"""Dataset: {st.session_state.contexto_app.get('total_numeros',0)} números, 
                     Atraso total: {st.session_state.contexto_app.get('total_atraso',0)},
-                    Gumbel: μ={st.session_state.contexto_app.get('gumbel_mu',0):.2f}, β={st.session_state.contexto_app.get('gumbel_beta',0):.2f}"""
+                    Gumbel: μ={ctx_params[0]:.2f}, β={ctx_params[1]:.2f}"""
                     
+                    # Resultados desde session_state
                     res = "\n".join([
                         f"• `{r['Combinación']}` | P: {r['Puntuación']:.2f} | Tens.G: {r.get('tension_gumbel_promedio',0):.3f}" 
-                        for r in st.session_state.get('ultimos_resultados', [])[:5]
-                    ]) or "Sin resultados aún"
+                        for r in (st.session_state.ranking_top or [])[:5]
+                    ]) or "Sin resultados aún. Ejecuta la predicción primero."
                     
                     respuesta = responder_chat_gemini(prompt, ctx, res, api_key, modelo_gemini)
                     st.markdown(respuesta)
                     st.session_state.chat_history.append({"role": "assistant", "content": respuesta})
             else:
-                msg = "⚠️ Para chat inteligente: 1) Configura API Key en sidebar, 2) Carga archivos de datos"
+                msg = "⚠️ Para chat inteligente: 1) Configura API Key en sidebar, 2) Carga archivos, 3) Ejecuta predicción"
                 st.markdown(msg)
                 st.session_state.chat_history.append({"role": "assistant", "content": msg})
+    
+    # === DEBUG OPCIONAL (descomentar para troubleshooting) ===
+    # with st.expander("🔍 Debug Session State"):
+    #     st.write(f"• ranking_completo: {'✅' if st.session_state.ranking_completo else '❌'}")
+    #     st.write(f"• df_resultados: {'✅' if st.session_state.df_resultados is not None else '❌'}")
+    #     st.write(f"• gemini_configured: {st.session_state.gemini_configured}")
+    #     st.write(f"• datos_cargados: {st.session_state.datos_cargados}")
 
 if __name__ == "__main__":
     main()
