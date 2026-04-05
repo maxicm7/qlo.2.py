@@ -6,3 +6,6 @@ xgboost
 joblib
 openpyxl
 deap
+google-generativeai
+
+
