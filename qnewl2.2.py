@@ -162,7 +162,7 @@ with st.sidebar:
     st.header("🔑 Configuración AI")
     gemini_api_key = st.text_input("Gemini API Key", type="password")
     st.divider()
-    n_candidatos = st.number_input("Candidatos", 1000, 200000, 50000)
+    n_candidatos = st.number_input("Candidatos", 1000, 1000000, 50000)
     ventana = st.slider("Ventana Dinámica", 10, 200, 50)
     top_n = st.number_input("Top a mostrar", 5, 100, 15)
 
