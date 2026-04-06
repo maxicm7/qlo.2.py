@@ -947,9 +947,14 @@ def main():
         
         st.divider()
         
-        # 🎯 CALIBRADOR DE VENTANA (NUEVO)
+        # 🎯 CALIBRADOR DE VENTANA (CORREGIDO)
         st.subheader("🎯 Calibrar Ventana")
         st.caption("Encuentra la ventana óptima para correlaciones")
+        
+        if 'calibracion_completada' not in st.session_state:
+            st.session_state.calibracion_completada = False
+        if 'ventana_calibrada_valor' not in st.session_state:
+            st.session_state.ventana_calibrada_valor = None
         
         if st.button("🔬 Calcular Ventana Óptima", type="secondary"):
             if st.session_state.datos_cargados and len(st.session_state.hs) >= 50:
@@ -960,11 +965,29 @@ def main():
                         ventanas_prueba=[25, 30, 35, 40, 45, 50, 60]
                     )
                     if ventana_optima:
-                        st.session_state.parametros_generacion['ventana'] = ventana_optima
-                        st.session_state.ventana_optima_calculada = True
-                        st.success(f"✅ Ventana actualizada a {ventana_optima} sorteos")
-                        st.info("💡 La ventana se aplicará en la próxima generación")
-                        st.rerun()
+                        st.session_state.ventana_calibrada_valor = ventana_optima
+                        st.session_state.calibracion_completada = True
+            else:
+                st.error("❌ Necesitas al menos 50 sorteos cargados")
+        
+        if st.session_state.calibracion_completada and st.session_state.ventana_calibrada_valor:
+            st.success(f"✅ Ventana óptima: {st.session_state.ventana_calibrada_valor} sorteos")
+            
+            col_a1, col_a2 = st.columns(2)
+            with col_a1:
+                if st.button("✅ Aplicar", key="btn_aplicar_ventana", type="primary"):
+                    st.session_state.parametros_generacion['ventana'] = st.session_state.ventana_calibrada_valor
+                    st.session_state.ventana_optima_calculada = True
+                    st.session_state.calibracion_completada = False
+                    st.success("✅ Aplicada. El slider se actualizó.")
+                    st.rerun()
+            
+            with col_a2:
+                if st.button("❌ Descartar", key="btn_descartar_ventana"):
+                    st.session_state.calibracion_completada = False
+                    st.session_state.ventana_calibrada_valor = None
+                    st.info("Descartada.")
+                    st.rerun()
             else:
                 st.error("❌ Necesitas al menos 50 sorteos cargados")
         
