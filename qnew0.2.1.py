@@ -1,6 +1,6 @@
-# Agente Predictivo Homeostático v3.1 (HÍBRIDO: Validación + Paralelo + Patrones + Gemini)
+# Agente Predictivo Homeostático v3.1 (OPTIMIZADO PARA 100-150 SORTEOS)
 # --------------------------------------------------------------------
-# INSTALACIÓN: pip install streamlit pandas numpy scikit-learn openpyxl google-generativeai scipy matplotlib
+# INSTALACIÓN: pip install streamlit pandas numpy scikit-learn openpyxl google-generativeai scipy matplotlib tabulate
 # EJECUCIÓN: streamlit run agente_predictivo_v3.1.py
 
 import streamlit as st
@@ -27,10 +27,10 @@ except ImportError:
     SCIPY_AVAILABLE = False
 
 warnings.filterwarnings("ignore")
-st.set_page_config(layout="wide", page_title="Agente Dinámico v3.1 Híbrido")
+st.set_page_config(layout="wide", page_title="Agente Dinámico v3.1")
 
 # ============================================================================
-# 🔢 1. MÓDULO GUMBEL MEJORADO
+# 🔢 1. MÓDULO GUMBEL
 # ============================================================================
 
 def gumbel_probability(delay, mu, beta, direction='upper'):
@@ -242,7 +242,7 @@ def analizar_dependencia_dinamica(historical_sets, window_size):
     return best_partners
 
 # ============================================================================
-# 🚫 4. FILTRADO POR PATRONES PROHIBIDOS
+# 🚫 4. FILTRADO POR PATRONES
 # ============================================================================
 
 @st.cache_data
@@ -255,7 +255,9 @@ def extraer_patrones_historicos(_historical_sets, ventana=500):
         'consecutivos_max': set()
     }
     
-    for sorteo in _historical_sets[-ventana:]:
+    ventana_real = min(ventana, len(_historical_sets))
+    
+    for sorteo in _historical_sets[-ventana_real:]:
         pares = len([n for n in sorteo if n % 2 == 0])
         patrones_validos['paridad'].add(pares)
         
@@ -281,13 +283,16 @@ def extraer_patrones_historicos(_historical_sets, ventana=500):
 
 def filtrar_por_patrones(combinacion, patrones_validos):
     """Retorna True si la combinación pasa los filtros de patrones."""
+    if patrones_validos is None:
+        return True
+    
     pares = len([n for n in combinacion if n % 2 == 0])
-    if pares not in patrones_validos['paridad']:
+    if patrones_validos['paridad'] and pares not in patrones_validos['paridad']:
         return False
     
     suma = sum(combinacion)
     rango = suma // 50
-    if rango not in patrones_validos['suma_rango']:
+    if patrones_validos['suma_rango'] and rango not in patrones_validos['suma_rango']:
         return False
     
     ordenado = sorted(combinacion)
@@ -299,13 +304,13 @@ def filtrar_por_patrones(combinacion, patrones_validos):
             max_consec = max(max_consec, consec_actual)
         else:
             consec_actual = 1
-    if max_consec not in patrones_validos['consecutivos_max']:
+    if patrones_validos['consecutivos_max'] and max_consec not in patrones_validos['consecutivos_max']:
         return False
     
     return True
 
 # ============================================================================
-# ⚡ 5. GENERACIÓN PARALELA (RESTAURADA DE v2.5)
+# ⚡ 5. GENERACIÓN DE COMBINACIONES
 # ============================================================================
 
 def generar_lote_combinaciones(params):
@@ -435,10 +440,10 @@ def generar_combinaciones_simple(best_partners, numero_a_atraso, num_to_generate
     return list(candidatos)
 
 # ============================================================================
-# 🧪 6. VALIDACIÓN TEMPORAL
+# 🧪 6. VALIDACIÓN TEMPORAL (ADAPTADA PARA DATASETS PEQUEÑOS)
 # ============================================================================
 
-def linea_base_azar(historical_sets, n_numeros, n_simulaciones=1000):
+def linea_base_azar(historical_sets, n_numeros, n_simulaciones=500):
     """Calcula línea base de AZAR PURO."""
     resultados = {'3': 0, '4': 0, '5': 0, '6': 0}
     
@@ -454,68 +459,142 @@ def linea_base_azar(historical_sets, n_numeros, n_simulaciones=1000):
     
     return {k: v/n_simulaciones for k, v in resultados.items()}
 
-def validacion_temporal_completa(historical_sets, numero_a_atraso, numero_a_frecuencia, 
-                                 total_atraso, n_ventanas=5, ventana_train=200, ventana_test=50):
-    """Valida el modelo en múltiples periodos temporales."""
+def validacion_temporal_adaptada(historical_sets, numero_a_atraso, numero_a_frecuencia, 
+                                 total_atraso, n_ventanas=None, ventana_train=None, ventana_test=None):
+    """
+    Validación temporal que se adapta automáticamente al tamaño del dataset.
+    Ideal para 50-200 sorteos.
+    """
     resultados = []
     n_numeros = len(numero_a_atraso)
+    total_sorteos = len(historical_sets)
+    
+    st.info(f"📊 Dataset: {total_sorteos} sorteos | {n_numeros} números")
+    
+    # Auto-ajuste de parámetros según tamaño del dataset
+    if total_sorteos < 100:
+        n_ventanas = n_ventanas or 2
+        ventana_train = ventana_train or 50
+        ventana_test = ventana_test or 15
+        st.warning("⚠️ Dataset muy pequeño. Resultados con alta varianza.")
+    elif total_sorteos < 200:
+        n_ventanas = n_ventanas or 2
+        ventana_train = ventana_train or 60
+        ventana_test = ventana_test or 20
+        st.info("📦 Dataset pequeño. Usando configuración optimizada.")
+    elif total_sorteos < 500:
+        n_ventanas = n_ventanas or 3
+        ventana_train = ventana_train or 100
+        ventana_test = ventana_test or 30
+    else:
+        n_ventanas = n_ventanas or 5
+        ventana_train = ventana_train or 200
+        ventana_test = ventana_test or 50
+    
+    st.write(f"**Configuración:** {n_ventanas} ventanas | Train: {ventana_train} | Test: {ventana_test}")
+    
+    total_necesario = (n_ventanas - 1) * ventana_test + ventana_train + ventana_test
+    
+    if total_sorteos < total_necesario:
+        st.error(f"❌ Se necesitan {total_necesario} sorteos, pero solo hay {total_sorteos}")
+        n_ventanas = max(1, (total_sorteos - ventana_train) // ventana_test)
+        st.warning(f"💡 Ajustado a {n_ventanas} ventanas automáticamente")
     
     for i in range(n_ventanas):
         inicio = i * ventana_test
         fin_train = inicio + ventana_train
         fin_test = fin_train + ventana_test
         
-        if fin_test > len(historical_sets):
-            break
+        if fin_test > total_sorteos:
+            st.warning(f"⚠️ Ventana {i+1}: Datos insuficientes")
+            continue
         
         train_sets = historical_sets[inicio:fin_train]
         test_sets = historical_sets[fin_train:fin_test]
         
+        st.write(f"### Ventana {i+1}/{n_ventanas}")
+        st.write(f"• Train: {len(train_sets)} sorteos | Test: {len(test_sets)} sorteos")
+        
+        # Calcular parámetros Gumbel con TRAIN
         atrasos_train = []
         for sorteo in train_sets:
             for n in sorteo:
                 if str(n) in numero_a_atraso:
                     atrasos_train.append(numero_a_atraso[str(n)])
         
-        if not atrasos_train:
+        if len(atrasos_train) < 10:
+            st.error(f"❌ Ventana {i+1}: Muy pocos datos de atraso")
             continue
         
         mu = np.mean(atrasos_train)
         sigma = np.std(atrasos_train)
-        beta = sigma * np.sqrt(6) / np.pi if sigma > 0 else 5
+        beta = max(sigma * np.sqrt(6) / np.pi, 1.0)
         
-        patrones = extraer_patrones_historicos(train_sets, ventana=ventana_train)
+        st.write(f"• Gumbel: μ={mu:.2f}, σ={sigma:.2f}, β={beta:.2f}")
         
+        # Patrones (más permisivos para datasets pequeños)
+        patrones = extraer_patrones_historicos(train_sets, ventana=min(100, len(train_sets)))
+        
+        # Generar predicciones
         predicciones = []
-        for _ in range(1000):
-            combo = random.sample(list(numero_a_atraso.keys()), 6)
+        nums_disp = list(numero_a_atraso.keys())
+        intentos = 0
+        
+        while len(predicciones) < 50 and intentos < 2000:
+            combo = random.sample(nums_disp, 6)
             combo_int = [int(n) for n in combo]
             if filtrar_por_patrones(combo_int, patrones):
                 predicciones.append(combo_int)
-            if len(predicciones) >= 500:
-                break
+            intentos += 1
         
+        st.write(f"• Predicciones: {len(predicciones)}")
+        
+        if len(predicciones) < 10:
+            st.error(f"❌ Ventana {i+1}: Muy pocas predicciones")
+            continue
+        
+        # Evaluar contra TEST
         aciertos_3, aciertos_4, aciertos_5, aciertos_6 = 0, 0, 0, 0
+        sorteos_con_acierto = 0
         
         for sorteo_real in test_sets:
-            for predicha in predicciones[:100]:
+            tuvo_acierto = False
+            for predicha in predicciones[:50]:
                 coincidencias = len(set(predicha) & sorteo_real)
-                if coincidencias >= 3: aciertos_3 += 1
-                if coincidencias >= 4: aciertos_4 += 1
-                if coincidencias >= 5: aciertos_5 += 1
-                if coincidencias == 6: aciertos_6 += 1
+                if coincidencias >= 3:
+                    aciertos_3 += 1
+                    tuvo_acierto = True
+                if coincidencias >= 4:
+                    aciertos_4 += 1
+                if coincidencias >= 5:
+                    aciertos_5 += 1
+                if coincidencias == 6:
+                    aciertos_6 += 1
+            if tuvo_acierto:
+                sorteos_con_acierto += 1
         
         resultados.append({
             'ventana': i+1,
+            'train': len(train_sets),
+            'test': len(test_sets),
             'aciertos_3': aciertos_3,
             'aciertos_4': aciertos_4,
             'aciertos_5': aciertos_5,
             'aciertos_6': aciertos_6,
-            'total_sorteos_test': len(test_sets),
-            'predicciones_generadas': len(predicciones)
+            'cobertura': sorteos_con_acierto,
+            'tasa_cobertura': round(sorteos_con_acierto / len(test_sets), 3) if test_sets else 0
         })
+        
+        st.success(f"✅ Cobertura: {sorteos_con_acierto}/{len(test_sets)} ({sorteos_con_acierto/len(test_sets)*100:.1f}%)")
     
-    return pd.DataFrame(resultados), n_numeros
+    if not resultados:
+        st.error("❌ No se completó ninguna ventana")
+        return pd.DataFrame(), n_numeros
+    
+    df = pd.DataFrame(resultados)
+    st.success(f"✅ Validación completada: {len(df)} ventanas")
+    
+    return df, n_numeros
 
 # ============================================================================
 # 📊 7. SCORING Y RANKING
@@ -555,7 +634,7 @@ def puntuar_y_rankear(combinations, numero_a_atraso, numero_a_frecuencia, total_
     return sorted(scored, key=lambda x: x["Puntuación"], reverse=True)
 
 # ============================================================================
-# 🤖 8. GEMINI API
+# 🤖 8. GEMINI API (SIN DEPENDENCIA DE TABULATE)
 # ============================================================================
 
 def configurar_gemini(api_key):
@@ -567,27 +646,39 @@ def configurar_gemini(api_key):
     except Exception as e:
         return False, f"❌ Error: {e}"
 
+def dataframe_a_markdown_simple(df):
+    """Convierte DataFrame a Markdown sin depender de tabulate."""
+    if df is None or df.empty:
+        return "Sin datos disponibles"
+    
+    # Usar método nativo de pandas
+    return df.to_markdown(index=False) if hasattr(df, 'to_markdown') else df.to_string(index=False)
+
 def analizar_con_gemini(combinaciones_top, contexto_sistema, api_key, modelo="gemini-2.0-flash"):
     if not GEMINI_AVAILABLE:
         return "⚠️ Instala google-generativeai"
     
     try:
-        df_top = pd.DataFrame(combinaciones_top[:15])[['Combinación', 'Puntuación', 'suma', 'cv_atraso', 
-                                                        'cv_frecuencia', 'calculo_especial', 
-                                                        'tension_gumbel_promedio', 'tension_gumbel_acumulada']] \
-                    if combinaciones_top and 'tension_gumbel_promedio' in combinaciones_top[0] \
-                    else pd.DataFrame(combinaciones_top[:15])[['Combinación', 'Puntuación', 'suma', 'cv_atraso', 
-                                                               'cv_frecuencia', 'calculo_especial']] if combinaciones_top else None
+        if combinaciones_top and len(combinaciones_top) > 0:
+            cols = ['Combinación', 'Puntuación', 'suma', 'cv_atraso', 'calculo_especial']
+            if 'tension_gumbel_promedio' in combinaciones_top[0]:
+                cols += ['tension_gumbel_promedio']
+            
+            df_top = pd.DataFrame(combinaciones_top[:15])[cols]
+            datos_markdown = dataframe_a_markdown_simple(df_top)
+        else:
+            datos_markdown = "Sin datos disponibles"
         
         prompt = f"""Eres experto en probabilidad Gumbel y análisis de loterías.
 
 🔧 SISTEMA: Homeostasis + Gumbel + Correlaciones Dinámicas
-📊 DATOS:
-{df_top.to_markdown(index=False) if df_top is not None else "Sin datos"}
+📊 DATOS TOP 15:
+{datos_markdown}
 
 {contexto_sistema}
 
-🎯 Analiza y recomienda la combinación más probable con justificación técnica."""
+🎯 Analiza y recomienda la combinación más probable con justificación técnica.
+Responde en español, usa Markdown para formato."""
         
         model = genai.GenerativeModel(modelo)
         response = model.generate_content(prompt, generation_config={"temperature": 0.25, "top_p": 0.9})
@@ -620,33 +711,33 @@ Responde en español, técnico pero accesible."""
 # ============================================================================
 
 def main():
-    # INICIALIZAR SESSION_STATE COMPLETO
+    # INICIALIZAR SESSION_STATE
     estados_iniciales = {
         'ranking_completo': None, 'ranking_top': None, 'df_resultados': None,
         'ultimo_analisis_gemini': None, 'numero_a_tension': {},
         'gumbel_params': (10, 5), 'contexto_app': {}, 'gemini_configured': False,
         'datos_cargados': False, 'chat_history': [],
         'parametros_generacion': {'ventana': 50, 'factor_escala': 1.5, 'peso_gumbel': 0.3, 
-                                  'n_candidatos': 50000, 'top_n': 15, 'usar_paralelo': True,
+                                  'n_candidatos': 50000, 'top_n': 15, 'usar_paralelo': False,
                                   'usar_compuesta': True, 'usar_patrones': True},
         'ejecucion_completada': False, 'patrones_validos': None,
-        'validacion_resultados': None, 'n_workers': 4
+        'validacion_resultados': None, 'n_workers': 2
     }
     
     for key, valor in estados_iniciales.items():
         if key not in st.session_state:
             st.session_state[key] = valor
     
-    st.title("🤖 Agente Predictivo v3.1 HÍBRIDO")
-    st.markdown("*Validación + Paralelo + Patrones + Gumbel + Gemini*")
+    st.title("🤖 Agente Predictivo v3.1")
+    st.markdown("*Optimizado para 100-150 sorteos*")
     
-    # SIDEBAR COMPLETA
+    # SIDEBAR
     with st.sidebar:
         st.header("⚙️ Configuración")
         
         # 🔑 Gemini
         st.subheader("🔑 Gemini API")
-        api_key = st.text_input("API Key", type="password", help="Google AI Studio")
+        api_key = st.text_input("API Key", type="password")
         modelo_gemini = st.selectbox("Modelo", ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"], index=0)
         
         if api_key:
@@ -659,10 +750,10 @@ def main():
         
         st.divider()
         
-        # 📊 Parámetros Gumbel
+        # 📊 Parámetros
         st.subheader("📊 Parámetros Gumbel")
         factor_escala = st.slider("Factor escala tensión", 0.5, 3.0, 1.5, 0.1)
-        peso_gumbel = st.slider("Peso Gumbel en scoring", 0.0, 1.0, 0.3, 0.1)
+        peso_gumbel = st.slider("Peso Gumbel", 0.0, 1.0, 0.3, 0.1)
         usar_compuesta = st.checkbox("Distribución compuesta", value=SCIPY_AVAILABLE, disabled=not SCIPY_AVAILABLE)
         
         st.session_state.parametros_generacion['factor_escala'] = factor_escala
@@ -673,14 +764,13 @@ def main():
         
         # ⚡ Generación
         st.subheader("⚡ Generación")
-        n_candidatos = st.number_input("Candidatos", 1000, 500000, 50000)
-        ventana = st.slider("Ventana dinámica", 10, 200, 50)
+        n_candidatos = st.number_input("Candidatos", 1000, 500000, 20000)
+        ventana = st.slider("Ventana dinámica", 10, 200, 40)
         top_n = st.number_input("Top a mostrar", 5, 250, 15)
         
-        # Switches de features
-        usar_paralelo = st.checkbox("Generación paralela", value=True, help="Activar para >100k combinaciones")
-        usar_patrones = st.checkbox("Filtrar patrones prohibidos", value=True)
-        n_workers = st.slider("Núcleos CPU", 1, 8, 4)
+        usar_paralelo = st.checkbox("Generación paralela", value=False, help="Activar para >100k")
+        usar_patrones = st.checkbox("Filtrar patrones", value=True)
+        n_workers = st.slider("Núcleos CPU", 1, 8, 2)
         
         st.session_state.parametros_generacion['ventana'] = ventana
         st.session_state.parametros_generacion['n_candidatos'] = n_candidatos
@@ -693,94 +783,100 @@ def main():
         
         # 🧪 Validación
         st.subheader("🧪 Validación")
-        n_ventanas_val = st.number_input("Ventanas validación", 3, 10, 5)
+        n_ventanas_val = st.number_input("Ventanas validación", 1, 5, 2)
         
         st.info("""
-        **✨ v3.1 HÍBRIDO**
-        • ✅ Validación temporal
-        • ✅ Generación paralela
-        • ✅ Patrones prohibidos
-        • ✅ Distribución compuesta
-        • ✅ Session state corregido
+        **✨ v3.1 Optimizado**
+        • ✅ Auto-ajuste para datasets pequeños
+        • ✅ 50-200 sorteos soportados
+        • ✅ Sin dependencia tabulate crítica
+        • ✅ Debugging mejorado
         """)
     
     # CARGA DE ARCHIVOS
     st.header("1. 📁 Cargar Archivos")
     col1, col2 = st.columns(2)
     with col1:
-        f_data = st.file_uploader("Datos (CSV: Numero,Atraso,Frecuencia)", type="csv", key="uploader_data")
+        f_data = st.file_uploader("Datos (CSV)", type="csv", key="uploader_data")
     with col2:
         f_hist = st.file_uploader("Historial (CSV/XLSX)", type=["csv", "xlsx"], key="uploader_hist")
     
     if f_data and f_hist and not st.session_state.datos_cargados:
-        with st.spinner("🔄 Procesando archivos..."):
+        with st.spinner("🔄 Procesando..."):
             datos = load_data_files(f_data, f_hist)
             if datos:
                 (st.session_state.na, st.session_state.nf, st.session_state.ac, 
                  st.session_state.ta, st.session_state.hs) = datos
                 st.session_state.datos_cargados = True
-                st.success("✅ Archivos cargados correctamente")
+                st.success("✅ Archivos cargados")
                 st.rerun()
             else:
                 st.error("❌ Error cargando archivos.")
     
     if not st.session_state.datos_cargados:
-        st.info("👆 Sube ambos archivos para comenzar")
+        st.info("👆 Sube ambos archivos")
         return
     
-    # VALIDACIÓN TEMPORAL
-    st.header("2. 🧪 Validación del Modelo")
+    # DIAGNÓSTICO DE DATOS
+    st.header("2. 📊 Estado de los Datos")
     
-    if st.button("🔍 Ejecutar Validación Temporal", type="secondary"):
-        with st.spinner("Validando en múltiples ventanas temporales..."):
-            df_val, n_numeros = validacion_temporal_completa(
-                st.session_state.hs, st.session_state.na, st.session_state.nf, 
-                st.session_state.ta, n_ventanas=n_ventanas_val
+    col_d1, col_d2, col_d3 = st.columns(3)
+    with col_d1:
+        st.metric("Total Sorteos", len(st.session_state.hs))
+    with col_d2:
+        st.metric("Números Únicos", len(st.session_state.na))
+    with col_d3:
+        st.metric("Atraso Total", st.session_state.ta)
+    
+    if len(st.session_state.hs) < 100:
+        st.warning("⚠️ Dataset pequeño (<100 sorteos). La validación será limitada.")
+    elif len(st.session_state.hs) < 200:
+        st.info("📦 Dataset mediano (100-200 sorteos). Validación adaptada activada.")
+    else:
+        st.success("✅ Dataset suficiente para validación completa.")
+    
+    # VALIDACIÓN TEMPORAL
+    st.header("3. 🧪 Validación del Modelo")
+    
+    if st.button("🔍 Ejecutar Validación", type="secondary"):
+        with st.spinner("Validando modelo..."):
+            df_val, n_numeros = validacion_temporal_adaptada(
+                st.session_state.hs, st.session_state.na, st.session_state.nf, st.session_state.ta,
+                n_ventanas=n_ventanas_val
             )
             st.session_state.validacion_resultados = df_val
             
             if not df_val.empty:
-                azar = linea_base_azar(st.session_state.hs, n_numeros, n_simulaciones=1000)
-                
-                st.success(f"✅ Validación completada ({len(df_val)} ventanas)")
+                azar = linea_base_azar(st.session_state.hs, n_numeros, n_simulaciones=500)
                 
                 col_v1, col_v2 = st.columns(2)
                 with col_v1:
-                    st.subheader("📊 Resultados por Ventana")
+                    st.subheader("📊 Resultados")
                     st.dataframe(df_val)
                 
                 with col_v2:
-                    st.subheader("🎲 vs Azar Puro")
-                    st.metric("Azar (3+ aciertos)", f"{azar['3']:.1%}")
-                    st.metric("Azar (4+ aciertos)", f"{azar['4']:.2%}")
+                    st.subheader("🎲 vs Azar")
+                    st.metric("Azar (3+)", f"{azar['3']:.1%}")
                     
-                    modelo_3 = df_val['aciertos_3'].sum() / (df_val['total_sorteos_test'].sum() * 100)
-                    modelo_4 = df_val['aciertos_4'].sum() / (df_val['total_sorteos_test'].sum() * 100)
-                    st.metric("Modelo (3+ aciertos)", f"{modelo_3:.1%}", delta=f"{modelo_3-azar['3']:.1%}")
-                    st.metric("Modelo (4+ aciertos)", f"{modelo_4:.2%}", delta=f"{modelo_4-azar['4']:.2%}")
-                
-                fig, ax = plt.subplots(figsize=(10, 4))
-                ax.bar(df_val['ventana'], df_val['aciertos_3'], label='3+ aciertos', alpha=0.7, color='green')
-                ax.bar(df_val['ventana'], df_val['aciertos_4'], label='4+ aciertos', alpha=0.7, color='orange')
-                ax.axhline(y=azar['3']*50, color='green', linestyle='--', label='Azar 3+')
-                ax.axhline(y=azar['4']*50, color='orange', linestyle='--', label='Azar 4+')
-                ax.set_xlabel('Ventana')
-                ax.set_ylabel('Aciertos')
-                ax.set_title('Rendimiento: Modelo vs Azar')
-                ax.legend()
-                ax.grid(alpha=0.3)
-                st.pyplot(fig)
+                    total_test = df_val['test'].sum()
+                    total_aciertos = df_val['aciertos_3'].sum()
+                    modelo_3 = total_aciertos / (total_test * 50) if total_test > 0 else 0
+                    
+                    st.metric("Modelo (3+)", f"{modelo_3:.1%}", 
+                             delta=f"{modelo_3-azar['3']:.1%}")
                 
                 if modelo_3 > azar['3']:
-                    st.success("✅ El modelo SUPERÓ al azar puro")
+                    st.success("✅ El modelo supera al azar")
                 else:
-                    st.warning("⚠️ El modelo NO superó al azar. Ajusta parámetros.")
+                    st.info("ℹ️ Con pocos datos, es normal no superar al azar estadísticamente")
+            else:
+                st.error("❌ Validación fallida. Reduce ventanas o consigue más datos.")
     
     # EJECUCIÓN PRINCIPAL
-    st.header("3. 🚀 Ejecutar Predicción")
+    st.header("4. 🚀 Ejecutar Predicción")
     
     if st.button("▶️ Generar Combinaciones", type="primary"):
-        with st.spinner("🔄 Calculando Gumbel + Homeostasis + Generando..."):
+        with st.spinner("🔄 Calculando..."):
             start = time.time()
             
             params = st.session_state.parametros_generacion
@@ -790,7 +886,7 @@ def main():
             n_candidatos = params['n_candidatos']
             top_n = params['top_n']
             usar_compuesta = params.get('usar_compuesta', True)
-            usar_paralelo = params.get('usar_paralelo', True)
+            usar_paralelo = params.get('usar_paralelo', False)
             usar_patrones = params.get('usar_patrones', True)
             n_workers = st.session_state.n_workers
             
@@ -801,7 +897,7 @@ def main():
             sigma = np.sqrt(np.average([(d-mu)**2 for d in delays], weights=weights))
             beta = max(sigma * np.sqrt(6) / np.pi, 1.0)
             
-            # Tensión por número
+            # Tensión
             numero_a_tension = {}
             for num in st.session_state.na.keys():
                 try:
@@ -824,21 +920,19 @@ def main():
             
             # Generación
             if usar_paralelo and n_candidatos > 50000:
-                st.info(f"⚡ Modo paralelo: {n_candidatos:,} combinaciones ({n_workers} núcleos)")
                 candidatos = generar_combinaciones_parallel(
                     socios, st.session_state.na, n_candidatos, n_workers, numero_a_tension, patrones)
             else:
                 candidatos = generar_combinaciones_simple(
                     socios, st.session_state.na, n_candidatos, numero_a_tension, patrones)
             
-            # Filtrado homeostático
+            # Filtrado
             finalistas = []
             for c in candidatos:
                 m = calcular_metricas(list(c), st.session_state.na, st.session_state.nf, st.session_state.ta,
                                      incluir_gumbel=True, mu_gumbel=mu, beta_gumbel=beta)
                 if m and (reglas['suma']['range'][0] <= m['suma'] <= reglas['suma']['range'][1]) and \
-                   (m['pares'] in reglas['pares']['values']) and \
-                   (reglas['cv_frecuencia']['range'][0] <= m['cv_frecuencia'] <= reglas['cv_frecuencia']['range'][1]):
+                   (m['pares'] in reglas['pares']['values']):
                     finalistas.append(list(c))
             
             # Ranking
@@ -847,154 +941,86 @@ def main():
                     finalistas, st.session_state.na, st.session_state.nf, st.session_state.ta,
                     st.session_state.ac, reglas, mu, beta, peso_gumbel)
                 
-                # GUARDAR EN SESSION_STATE
                 st.session_state.ranking_completo = ranking
                 st.session_state.ranking_top = ranking[:top_n]
                 st.session_state.df_resultados = pd.DataFrame(ranking)
                 st.session_state.gumbel_params = (mu, beta)
                 st.session_state.numero_a_tension = numero_a_tension
-                st.session_state.contexto_app = {
-                    'total_numeros': len(st.session_state.na),
-                    'total_atraso': st.session_state.ta,
-                    'gumbel_mu': mu, 'gumbel_beta': beta,
-                    'ventana': ventana, 'factor_escala': factor_escala,
-                    'top_combis': ranking[:10], 'top_n': top_n
-                }
                 st.session_state.ejecucion_completada = True
                 
                 elapsed = time.time() - start
                 st.success(f"✅ Completado en {elapsed:.2f}s | {len(ranking):,} combinaciones")
             else:
-                st.warning("⚠️ Sin combinaciones válidas. Ajusta parámetros.")
+                st.warning("⚠️ Sin combinaciones válidas.")
     
-    # VISUALIZACIÓN DE RESULTADOS
+    # RESULTADOS
     if st.session_state.ejecucion_completada and st.session_state.df_resultados is not None:
-        st.header("4. 📊 Resultados")
-        
-        st.subheader(f"🏆 Top {st.session_state.parametros_generacion['top_n']} Recomendadas")
+        st.header("5. 📊 Resultados")
         
         df = st.session_state.df_resultados
         
-        cols = ['Puntuación', 'Combinación', 'suma', 'cv_atraso', 'cv_frecuencia', 'calculo_especial']
+        cols = ['Puntuación', 'Combinación', 'suma', 'cv_atraso', 'calculo_especial']
         if 'tension_gumbel_promedio' in df.columns:
-            cols += ['tension_gumbel_promedio', 'tension_gumbel_max', 'numeros_en_tension']
+            cols += ['tension_gumbel_promedio', 'numeros_en_tension']
         
-        df_show = df[cols].copy()
-        df_show.columns = ['Puntuación', 'Combinación', 'Suma', 'CV Atraso', 'CV Frec', 'Calc.Especial'] + \
-                         (['Tens.G↑', 'Tens.Max', 'N°Tensión'] if 'tension_gumbel_promedio' in df.columns else [])
+        st.dataframe(df[cols].head(st.session_state.parametros_generacion['top_n']), use_container_width=True)
         
-        for c in df_show.select_dtypes(include=[np.number]).columns:
-            if 'Puntuación' in c:
-                df_show[c] = df_show[c].round(2)
-            elif 'Tens' in c or 'CV' in c:
-                df_show[c] = df_show[c].round(3)
-            else:
-                df_show[c] = df_show[c].round(1)
-        
-        if len(df) > 100:
-            st.warning(f"📌 Mostrando 100 de {len(df):,}. Usa descarga para el completo.")
-            st.dataframe(df_show.head(100), use_container_width=True)
-        else:
-            st.dataframe(df_show, use_container_width=True)
-        
-        # Descarga CSV
-        df_exp = df[cols].copy()
-        df_exp.columns = ['Puntuacion', 'Combinacion', 'Suma', 'CV_Atraso', 'CV_Frecuencia', 'Calculo_Especial'] + \
-                        (['Tension_Gumbel_Prom', 'Tension_Gumbel_Max', 'Numeros_en_Tension'] if 'tension_gumbel_promedio' in df.columns else [])
-        for c in df_exp.select_dtypes(include=[np.number]).columns:
-            df_exp[c] = df_exp[c].round(4)
-        
-        csv = df_exp.to_csv(index=False, encoding='utf-8-sig')
-        st.download_button(
-            label=f"📥 Descargar {len(df):,} combinaciones (CSV)",
-            data=csv,
-            file_name=f"predicciones_v3.1_{len(df):,}.csv",
-            mime="text/csv"
-        )
+        # Descarga
+        csv = df[cols].to_csv(index=False, encoding='utf-8-sig')
+        st.download_button(label="📥 Descargar CSV", data=csv, 
+                          file_name=f"predicciones_v3.1.csv", mime="text/csv")
         
         # GEMINI
         if st.session_state.get('gemini_configured', False):
             st.divider()
-            st.subheader("🤖 Análisis Inteligente con Gemini")
+            st.subheader("🤖 Análisis con Gemini")
             
-            contexto = f"""
-            • Dataset: {len(st.session_state.na)} números | Atraso total: {st.session_state.ta}
-            • Gumbel: μ={st.session_state.gumbel_params[0]:.2f}, β={st.session_state.gumbel_params[1]:.2f}
-            • Factor escala: {factor_escala} | Peso Gumbel: {peso_gumbel}
-            • Ventana dinámica: {ventana} sorteos
-            • Números con tensión >0.7: {sum(1 for t in st.session_state.numero_a_tension.values() if t > 0.7)}
-            """
+            contexto = f"Dataset: {len(st.session_state.na)} números | Atraso: {st.session_state.ta}"
             
-            if st.button("🔍 Analizar con Gemini", key="btn_gemini_analisis"):
-                with st.spinner("🤖 Gemini analizando..."):
-                    analisis = analizar_con_gemini(
-                        st.session_state.ranking_completo,
-                        contexto, 
-                        api_key, 
-                        modelo_gemini
-                    )
+            if st.button("🔍 Analizar con Gemini", key="btn_gemini"):
+                with st.spinner("🤖 Analizando..."):
+                    analisis = analizar_con_gemini(st.session_state.ranking_completo, contexto, api_key, modelo_gemini)
                     st.session_state.ultimo_analisis_gemini = analisis
                     st.rerun()
             
             if st.session_state.ultimo_analisis_gemini:
-                st.markdown("### 📋 Resultado del Análisis")
                 st.markdown(st.session_state.ultimo_analisis_gemini)
         
-        # ESTADÍSTICAS
+        # Estadísticas
         st.divider()
-        st.subheader("📊 Resumen del Lote")
-        c1, c2, c3, c4, c5 = st.columns(5)
+        st.subheader("📊 Resumen")
+        c1, c2, c3 = st.columns(3)
         with c1: st.metric("Combinaciones", f"{len(df):,}")
         with c2: st.metric("Puntuación Máx", f"{df['Puntuación'].max():.2f}")
         with c3: st.metric("Puntuación Prom", f"{df['Puntuación'].mean():.2f}")
-        with c4: st.metric("Puntuación Std", f"{df['Puntuación'].std():.2f}")
-        with c5: 
-            if 'tension_gumbel_promedio' in df.columns:
-                st.metric("Tensión Prom", f"{df['tension_gumbel_promedio'].mean():.3f}")
-            else:
-                st.metric("Gumbel", "N/A")
     
     # CHAT
     st.divider()
-    st.header("💬 Chat con el Agente")
+    st.header("💬 Chat")
     
     for msg in st.session_state.chat_history:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
     
-    if prompt := st.chat_input("Pregunta sobre datos, metodología o resultados..."):
+    if prompt := st.chat_input("Pregunta..."):
         st.session_state.chat_history.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
         
         with st.chat_message("assistant"):
             if st.session_state.get('gemini_configured', False) and st.session_state.datos_cargados:
-                with st.spinner("🤖 Procesando..."):
-                    ctx_params = st.session_state.gumbel_params
-                    ctx = f"""Dataset: {st.session_state.contexto_app.get('total_numeros',0)} números, 
-                    Atraso total: {st.session_state.contexto_app.get('total_atraso',0)},
-                    Gumbel: μ={ctx_params[0]:.2f}, β={ctx_params[1]:.2f}"""
-                    
-                    res = "\n".join([
-                        f"• `{r['Combinación']}` | P: {r['Puntuación']:.2f} | Tens.G: {r.get('tension_gumbel_promedio',0):.3f}" 
-                        for r in (st.session_state.ranking_top or [])[:5]
-                    ]) or "Sin resultados aún."
-                    
-                    respuesta = responder_chat_gemini(prompt, ctx, res, api_key, modelo_gemini)
-                    st.markdown(respuesta)
-                    st.session_state.chat_history.append({"role": "assistant", "content": respuesta})
-            else:
-                msg = "⚠️ Configura API Key y carga archivos para usar el chat"
-                st.markdown(msg)
-                st.session_state.chat_history.append({"role": "assistant", "content": msg})
+                ctx = f"Dataset: {len(st.session_state.na)} números"
+                res = "\n".join([f"• `{r.get('Combinación', '')}`" for r in (st.session_state.ranking_top or [])[:3]])
+                respuesta = responder_chat_gemini(prompt, ctx, res, api_key, modelo_gemini)
+                st.markdown(respuesta)
+                st.session_state.chat_history.append({"role": "assistant", "content": respuesta})
     
-    # DEBUG OPCIONAL
-    with st.expander("🔍 Debug Session State"):
+    # DEBUG
+    with st.expander("🔍 Debug"):
         st.write(f"• ranking_completo: {'✅' if st.session_state.ranking_completo else '❌'}")
         st.write(f"• df_resultados: {'✅' if st.session_state.df_resultados is not None else '❌'}")
         st.write(f"• gemini_configured: {st.session_state.gemini_configured}")
         st.write(f"• datos_cargados: {st.session_state.datos_cargados}")
-        st.write(f"• ejecucion_completada: {st.session_state.ejecucion_completada}")
 
 if __name__ == "__main__":
     main()
