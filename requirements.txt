@@ -7,5 +7,6 @@ joblib
 openpyxl
 deap
 google-generativeai
+matplotlib
 
 
