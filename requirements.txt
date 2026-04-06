@@ -8,5 +8,6 @@ openpyxl
 deap
 google-generativeai
 matplotlib
+tabulete
 
 
