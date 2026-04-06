@@ -440,7 +440,7 @@ def generar_combinaciones_simple(best_partners, numero_a_atraso, num_to_generate
     return list(candidatos)
 
 # ============================================================================
-#  6. VALIDACIÓN TEMPORAL
+# 🧪 6. VALIDACIÓN TEMPORAL
 # ============================================================================
 
 def linea_base_azar(historical_sets, n_numeros, n_simulaciones=500):
@@ -589,15 +589,12 @@ def validacion_temporal_adaptada(historical_sets, numero_a_atraso, numero_a_frec
     return df, n_numeros
 
 # ============================================================================
-# 🎯 7. ANÁLISIS DE VENTANA ÓPTIMA (NUEVO)
+# 🎯 7. ANÁLISIS DE VENTANA ÓPTIMA
 # ============================================================================
 
 def analizar_ventana_optima(historical_sets, numero_a_atraso, 
                            ventanas_prueba=None, min_pares=50):
-    """
-    Evalúa múltiples ventanas para encontrar la óptima para correlación dinámica.
-    Ideal para datasets de 50-200 sorteos.
-    """
+    """Evalúa múltiples ventanas para encontrar la óptima para correlación dinámica."""
     if ventanas_prueba is None:
         ventanas_prueba = [20, 30, 35, 40, 45, 50, 60]
     
@@ -629,7 +626,6 @@ def analizar_ventana_optima(historical_sets, numero_a_atraso,
         pares_fuertes = sum(1 for v in co_occurrence.values() if v >= 2)
         ratio_fuertes = pares_fuertes / pares_observados if pares_observados > 0 else 0
         
-        # Estabilidad (dividir ventana en 2 mitades)
         if ventana >= 20:
             mitad = ventana // 2
             primera = historical_sets[-ventana:-mitad]
@@ -658,7 +654,6 @@ def analizar_ventana_optima(historical_sets, numero_a_atraso,
         else:
             estabilidad = 0
         
-        # Poder predictivo simple
         aciertos_prediccion = 0
         total_oportunidades = 0
         
@@ -678,7 +673,6 @@ def analizar_ventana_optima(historical_sets, numero_a_atraso,
         else:
             tasa_prediccion = 0
         
-        # Score combinado
         score = (
             0.3 * min(1.0, densidad * 2) +
             0.2 * ratio_fuertes +
@@ -712,7 +706,6 @@ def analizar_ventana_optima(historical_sets, numero_a_atraso,
         'score': '{:.3f}'
     }))
     
-    # Gráfico
     fig, ax = plt.subplots(figsize=(10, 5))
     
     col1, col2 = st.columns(2)
@@ -729,7 +722,6 @@ def analizar_ventana_optima(historical_sets, numero_a_atraso,
         st.pyplot(fig)
     
     with col2:
-        # Gráfico de densidad
         fig2, ax2 = plt.subplots(figsize=(10, 5))
         ax2.plot(df['ventana'], df['densidad'], 'o-', color='green', linewidth=2, label='Densidad')
         ax2.plot(df['ventana'], df['ratio_fuertes'], 's-', color='orange', linewidth=2, label='Ratio Fuertes')
@@ -741,7 +733,6 @@ def analizar_ventana_optima(historical_sets, numero_a_atraso,
         ax2.grid(alpha=0.3)
         st.pyplot(fig2)
     
-    # Recomendación
     optimo = df.loc[df['score'].idxmax()]
     st.success(f"""
     🎯 **Recomendación para tu dataset:**
@@ -754,7 +745,7 @@ def analizar_ventana_optima(historical_sets, numero_a_atraso,
     | Estabilidad | {optimo['estabilidad']:.2f} |
     | Poder predictivo | {optimo['tasa_prediccion']:.1%} |
     
-    💡 **Esta ventana ha sido guardada automáticamente** en el parámetro "Ventana dinámica".
+    💡 **Haz clic en 'Aplicar' para usar esta ventana.**
     """)
     
     return int(optimo['ventana'])
@@ -881,7 +872,8 @@ def main():
                                   'n_candidatos': 20000, 'top_n': 15, 'usar_paralelo': False,
                                   'usar_compuesta': True, 'usar_patrones': True},
         'ejecucion_completada': False, 'patrones_validos': None,
-        'validacion_resultados': None, 'n_workers': 2, 'ventana_optima_calculada': False
+        'validacion_resultados': None, 'n_workers': 2, 'ventana_optima_calculada': False,
+        'calibracion_completada': False, 'ventana_calibrada_valor': None
     }
     
     for key, valor in estados_iniciales.items():
@@ -926,11 +918,10 @@ def main():
         st.subheader("⚡ Generación")
         n_candidatos = st.number_input("Candidatos", 1000, 500000, 20000)
         
-        # 🎯 VENTANA DINÁMICA (con indicador de si fue calibrada)
         if st.session_state.ventana_optima_calculada:
             st.success("✅ Ventana calibrada automáticamente")
         
-        ventana = st.slider("Ventana dinámica", 10, 200, st.session_state.parametros_generacion['ventana'])
+        ventana = st.slider("Ventana dinámica", 10, 200, int(st.session_state.parametros_generacion['ventana']))
         st.session_state.parametros_generacion['ventana'] = ventana
         
         top_n = st.number_input("Top a mostrar", 5, 250, 15)
@@ -947,49 +938,42 @@ def main():
         
         st.divider()
         
-        # 🎯 CALIBRADOR DE VENTANA (CORREGIDO)
-            st.subheader("🎯 Calibrar Ventana")
-            st.caption("Encuentra la ventana óptima para correlaciones")
-            
-            if 'calibracion_completada' not in st.session_state:
-                st.session_state.calibracion_completada = False
-            if 'ventana_calibrada_valor' not in st.session_state:
-                st.session_state.ventana_calibrada_valor = None
-            
-            if st.button("🔬 Calcular Ventana Óptima", type="secondary"):
-                if st.session_state.datos_cargados and len(st.session_state.hs) >= 50:
-                    with st.spinner("Analizando correlaciones dinámicas..."):
-                        ventana_optima = analizar_ventana_optima(
-                            st.session_state.hs,
-                            st.session_state.na,
-                            ventanas_prueba=[25, 30, 35, 40, 45, 50, 60]
-                        )
-                        if ventana_optima:
-                            st.session_state.ventana_calibrada_valor = ventana_optima
-                            st.session_state.calibracion_completada = True
-                else:
-                    st.error("❌ Necesitas al menos 50 sorteos cargados")
-            
-            if st.session_state.calibracion_completada and st.session_state.ventana_calibrada_valor:
-                st.success(f"✅ Ventana óptima: {st.session_state.ventana_calibrada_valor} sorteos")
-                
-                col_a1, col_a2 = st.columns(2)
-                with col_a1:
-                    if st.button("✅ Aplicar", key="btn_aplicar_ventana", type="primary"):
-                        st.session_state.parametros_generacion['ventana'] = st.session_state.ventana_calibrada_valor
-                        st.session_state.ventana_optima_calculada = True
-                        st.session_state.calibracion_completada = False
-                        st.success("✅ Aplicada. El slider se actualizó.")
-                        st.rerun()
-                
-                with col_a2:
-                    if st.button("❌ Descartar", key="btn_descartar_ventana"):
-                        st.session_state.calibracion_completada = False
-                        st.session_state.ventana_calibrada_valor = None
-                        st.info("Descartada.")
-                        st.rerun()
+        # 🎯 CALIBRADOR DE VENTANA (CORREGIDO - SIN RERUN INMEDIATO)
+        st.subheader("🎯 Calibrar Ventana")
+        st.caption("Encuentra la ventana óptima para correlaciones")
+        
+        if st.button("🔬 Calcular Ventana Óptima", type="secondary"):
+            if st.session_state.datos_cargados and len(st.session_state.hs) >= 50:
+                with st.spinner("Analizando correlaciones dinámicas..."):
+                    ventana_optima = analizar_ventana_optima(
+                        st.session_state.hs,
+                        st.session_state.na,
+                        ventanas_prueba=[25, 30, 35, 40, 45, 50, 60]
+                    )
+                    if ventana_optima:
+                        st.session_state.ventana_calibrada_valor = ventana_optima
+                        st.session_state.calibracion_completada = True
             else:
                 st.error("❌ Necesitas al menos 50 sorteos cargados")
+        
+        if st.session_state.calibracion_completada and st.session_state.ventana_calibrada_valor:
+            st.success(f"✅ Ventana óptima: {st.session_state.ventana_calibrada_valor} sorteos")
+            
+            col_a1, col_a2 = st.columns(2)
+            with col_a1:
+                if st.button("✅ Aplicar", key="btn_aplicar_ventana", type="primary"):
+                    st.session_state.parametros_generacion['ventana'] = st.session_state.ventana_calibrada_valor
+                    st.session_state.ventana_optima_calculada = True
+                    st.session_state.calibracion_completada = False
+                    st.success("✅ Aplicada. El slider se actualizó.")
+                    st.rerun()
+            
+            with col_a2:
+                if st.button("❌ Descartar", key="btn_descartar_ventana"):
+                    st.session_state.calibracion_completada = False
+                    st.session_state.ventana_calibrada_valor = None
+                    st.info("Descartada.")
+                    st.rerun()
         
         st.divider()
         
@@ -1022,7 +1006,6 @@ def main():
                 st.session_state.datos_cargados = True
                 st.success("✅ Archivos cargados")
                 
-                # Auto-ajustar ventana inicial según tamaño del dataset
                 total_sorteos = len(st.session_state.hs)
                 if total_sorteos < 100:
                     ventana_inicial = 35
@@ -1117,14 +1100,12 @@ def main():
             
             st.info(f"⚙️ Configuración: Ventana={ventana}, Candidatos={n_candidatos:,}, Patrones={'✅' if usar_patrones else '❌'}")
             
-            # Parámetros Gumbel
             delays = list(st.session_state.ac.keys())
             weights = list(st.session_state.ac.values())
             mu = np.average(delays, weights=weights)
             sigma = np.sqrt(np.average([(d-mu)**2 for d in delays], weights=weights))
             beta = max(sigma * np.sqrt(6) / np.pi, 1.0)
             
-            # Tensión
             numero_a_tension = {}
             for num in st.session_state.na.keys():
                 try:
@@ -1135,17 +1116,11 @@ def main():
                 except:
                     continue
             
-            # Homeostasis
             reglas = analizar_historial_global(st.session_state.hs, st.session_state.na, st.session_state.nf, st.session_state.ta)
-            
-            # Correlaciones
             socios = analizar_dependencia_dinamica(st.session_state.hs, ventana)
-            
-            # Patrones
             patrones = extraer_patrones_historicos(st.session_state.hs) if usar_patrones else None
             st.session_state.patrones_validos = patrones
             
-            # Generación
             if usar_paralelo and n_candidatos > 50000:
                 candidatos = generar_combinaciones_parallel(
                     socios, st.session_state.na, n_candidatos, n_workers, numero_a_tension, patrones)
@@ -1153,7 +1128,6 @@ def main():
                 candidatos = generar_combinaciones_simple(
                     socios, st.session_state.na, n_candidatos, numero_a_tension, patrones)
             
-            # Filtrado
             finalistas = []
             for c in candidatos:
                 m = calcular_metricas(list(c), st.session_state.na, st.session_state.nf, st.session_state.ta,
@@ -1162,7 +1136,6 @@ def main():
                    (m['pares'] in reglas['pares']['values']):
                     finalistas.append(list(c))
             
-            # Ranking
             if finalistas:
                 ranking = puntuar_y_rankear(
                     finalistas, st.session_state.na, st.session_state.nf, st.session_state.ta,
@@ -1192,12 +1165,10 @@ def main():
         
         st.dataframe(df[cols].head(st.session_state.parametros_generacion['top_n']), use_container_width=True)
         
-        # Descarga
         csv = df[cols].to_csv(index=False, encoding='utf-8-sig')
         st.download_button(label="📥 Descargar CSV", data=csv, 
                           file_name=f"predicciones_v3.2.csv", mime="text/csv")
         
-        # GEMINI
         if st.session_state.get('gemini_configured', False):
             st.divider()
             st.subheader("🤖 Análisis con Gemini")
@@ -1213,7 +1184,6 @@ def main():
             if st.session_state.ultimo_analisis_gemini:
                 st.markdown(st.session_state.ultimo_analisis_gemini)
         
-        # Estadísticas
         st.divider()
         st.subheader("📊 Resumen")
         c1, c2, c3 = st.columns(3)
