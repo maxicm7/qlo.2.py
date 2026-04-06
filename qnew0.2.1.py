@@ -1,7 +1,7 @@
-# Agente Predictivo Homeostático v3.1 (OPTIMIZADO PARA 100-150 SORTEOS)
+# Agente Predictivo Homeostático v3.2 (CON CALIBRADOR DE VENTANA ÓPTIMA)
 # --------------------------------------------------------------------
 # INSTALACIÓN: pip install streamlit pandas numpy scikit-learn openpyxl google-generativeai scipy matplotlib tabulate
-# EJECUCIÓN: streamlit run agente_predictivo_v3.1.py
+# EJECUCIÓN: streamlit run agente_predictivo_v3.2.py
 
 import streamlit as st
 import pandas as pd
@@ -27,7 +27,7 @@ except ImportError:
     SCIPY_AVAILABLE = False
 
 warnings.filterwarnings("ignore")
-st.set_page_config(layout="wide", page_title="Agente Dinámico v3.1")
+st.set_page_config(layout="wide", page_title="Agente Dinámico v3.2")
 
 # ============================================================================
 # 🔢 1. MÓDULO GUMBEL
@@ -440,7 +440,7 @@ def generar_combinaciones_simple(best_partners, numero_a_atraso, num_to_generate
     return list(candidatos)
 
 # ============================================================================
-# 🧪 6. VALIDACIÓN TEMPORAL (ADAPTADA PARA DATASETS PEQUEÑOS)
+#  6. VALIDACIÓN TEMPORAL
 # ============================================================================
 
 def linea_base_azar(historical_sets, n_numeros, n_simulaciones=500):
@@ -461,17 +461,13 @@ def linea_base_azar(historical_sets, n_numeros, n_simulaciones=500):
 
 def validacion_temporal_adaptada(historical_sets, numero_a_atraso, numero_a_frecuencia, 
                                  total_atraso, n_ventanas=None, ventana_train=None, ventana_test=None):
-    """
-    Validación temporal que se adapta automáticamente al tamaño del dataset.
-    Ideal para 50-200 sorteos.
-    """
+    """Validación temporal que se adapta automáticamente al tamaño del dataset."""
     resultados = []
     n_numeros = len(numero_a_atraso)
     total_sorteos = len(historical_sets)
     
     st.info(f"📊 Dataset: {total_sorteos} sorteos | {n_numeros} números")
     
-    # Auto-ajuste de parámetros según tamaño del dataset
     if total_sorteos < 100:
         n_ventanas = n_ventanas or 2
         ventana_train = ventana_train or 50
@@ -515,7 +511,6 @@ def validacion_temporal_adaptada(historical_sets, numero_a_atraso, numero_a_frec
         st.write(f"### Ventana {i+1}/{n_ventanas}")
         st.write(f"• Train: {len(train_sets)} sorteos | Test: {len(test_sets)} sorteos")
         
-        # Calcular parámetros Gumbel con TRAIN
         atrasos_train = []
         for sorteo in train_sets:
             for n in sorteo:
@@ -532,10 +527,8 @@ def validacion_temporal_adaptada(historical_sets, numero_a_atraso, numero_a_frec
         
         st.write(f"• Gumbel: μ={mu:.2f}, σ={sigma:.2f}, β={beta:.2f}")
         
-        # Patrones (más permisivos para datasets pequeños)
         patrones = extraer_patrones_historicos(train_sets, ventana=min(100, len(train_sets)))
         
-        # Generar predicciones
         predicciones = []
         nums_disp = list(numero_a_atraso.keys())
         intentos = 0
@@ -553,7 +546,6 @@ def validacion_temporal_adaptada(historical_sets, numero_a_atraso, numero_a_frec
             st.error(f"❌ Ventana {i+1}: Muy pocas predicciones")
             continue
         
-        # Evaluar contra TEST
         aciertos_3, aciertos_4, aciertos_5, aciertos_6 = 0, 0, 0, 0
         sorteos_con_acierto = 0
         
@@ -597,7 +589,178 @@ def validacion_temporal_adaptada(historical_sets, numero_a_atraso, numero_a_frec
     return df, n_numeros
 
 # ============================================================================
-# 📊 7. SCORING Y RANKING
+# 🎯 7. ANÁLISIS DE VENTANA ÓPTIMA (NUEVO)
+# ============================================================================
+
+def analizar_ventana_optima(historical_sets, numero_a_atraso, 
+                           ventanas_prueba=None, min_pares=50):
+    """
+    Evalúa múltiples ventanas para encontrar la óptima para correlación dinámica.
+    Ideal para datasets de 50-200 sorteos.
+    """
+    if ventanas_prueba is None:
+        ventanas_prueba = [20, 30, 35, 40, 45, 50, 60]
+    
+    resultados = []
+    n_numeros = len(numero_a_atraso)
+    pares_posibles = n_numeros * (n_numeros - 1) // 2
+    
+    st.info(f"🔍 Evaluando ventanas: {ventanas_prueba}")
+    st.info(f"📊 Pares posibles: {pares_posibles:,}")
+    
+    for ventana in ventanas_prueba:
+        if ventana > len(historical_sets):
+            st.warning(f"⚠️ Ventana {ventana} > historial ({len(historical_sets)}), saltando")
+            continue
+        
+        recent = historical_sets[-ventana:]
+        co_occurrence = defaultdict(int)
+        
+        for sorteo in recent:
+            numeros = sorted([n for n in sorteo if str(n) in numero_a_atraso])
+            for i in range(len(numeros)):
+                for j in range(i+1, len(numeros)):
+                    par = (numeros[i], numeros[j])
+                    co_occurrence[par] += 1
+        
+        pares_observados = len(co_occurrence)
+        densidad = pares_observados / pares_posibles if pares_posibles > 0 else 0
+        
+        pares_fuertes = sum(1 for v in co_occurrence.values() if v >= 2)
+        ratio_fuertes = pares_fuertes / pares_observados if pares_observados > 0 else 0
+        
+        # Estabilidad (dividir ventana en 2 mitades)
+        if ventana >= 20:
+            mitad = ventana // 2
+            primera = historical_sets[-ventana:-mitad]
+            segunda = historical_sets[-mitad:]
+            
+            co_1, co_2 = defaultdict(int), defaultdict(int)
+            for sorteo in primera:
+                nums = sorted([n for n in sorteo if str(n) in numero_a_atraso])
+                for i in range(len(nums)):
+                    for j in range(i+1, len(nums)):
+                        co_1[(nums[i], nums[j])] += 1
+            for sorteo in segunda:
+                nums = sorted([n for n in sorteo if str(n) in numero_a_atraso])
+                for i in range(len(nums)):
+                    for j in range(i+1, len(nums)):
+                        co_2[(nums[i], nums[j])] += 1
+            
+            pares_comunes = set(co_1.keys()) | set(co_2.keys())
+            if len(pares_comunes) >= min_pares and SCIPY_AVAILABLE:
+                vals_1 = [co_1.get(p, 0) for p in pares_comunes]
+                vals_2 = [co_2.get(p, 0) for p in pares_comunes]
+                correlacion, p_valor = stats.spearmanr(vals_1, vals_2)
+                estabilidad = correlacion if p_valor < 0.1 else 0
+            else:
+                estabilidad = 0
+        else:
+            estabilidad = 0
+        
+        # Poder predictivo simple
+        aciertos_prediccion = 0
+        total_oportunidades = 0
+        
+        if len(historical_sets) > ventana + 10:
+            test_sets = historical_sets[-10:]
+            pares_fuertes_lista = [p for p, v in co_occurrence.items() if v >= 2]
+            
+            for sorteo_test in test_sets:
+                total_oportunidades += 1
+                numeros_test = set(n for n in sorteo_test if str(n) in numero_a_atraso)
+                for p in pares_fuertes_lista:
+                    if p[0] in numeros_test and p[1] in numeros_test:
+                        aciertos_prediccion += 1
+                        break
+            
+            tasa_prediccion = aciertos_prediccion / total_oportunidades if total_oportunidades > 0 else 0
+        else:
+            tasa_prediccion = 0
+        
+        # Score combinado
+        score = (
+            0.3 * min(1.0, densidad * 2) +
+            0.2 * ratio_fuertes +
+            0.3 * max(0, estabilidad) +
+            0.2 * min(1.0, tasa_prediccion * 5)
+        )
+        
+        resultados.append({
+            'ventana': ventana,
+            'densidad': round(densidad, 3),
+            'pares_observados': pares_observados,
+            'pares_fuertes': pares_fuertes,
+            'ratio_fuertes': round(ratio_fuertes, 3),
+            'estabilidad': round(estabilidad, 3),
+            'tasa_prediccion': round(tasa_prediccion, 3),
+            'score': round(score, 3)
+        })
+    
+    if not resultados:
+        st.error("❌ No se pudieron evaluar ventanas")
+        return None
+    
+    df = pd.DataFrame(resultados)
+    
+    st.subheader("📊 Comparación de Ventanas")
+    st.dataframe(df.style.format({
+        'densidad': '{:.1%}',
+        'ratio_fuertes': '{:.1%}',
+        'estabilidad': '{:.2f}',
+        'tasa_prediccion': '{:.1%}',
+        'score': '{:.3f}'
+    }))
+    
+    # Gráfico
+    fig, ax = plt.subplots(figsize=(10, 5))
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        ax.bar(df['ventana'], df['score'], color='steelblue', alpha=0.7)
+        ax.set_xlabel('Ventana (sorteos)')
+        ax.set_ylabel('Score Combinado')
+        ax.set_title('Score por Ventana')
+        ax.grid(axis='y', alpha=0.3)
+        
+        optimo = df.loc[df['score'].idxmax()]
+        ax.axvline(x=optimo['ventana'], color='red', linestyle='--', linewidth=2, label=f'Óptima: {optimo["ventana"]} sorteos')
+        ax.legend()
+        st.pyplot(fig)
+    
+    with col2:
+        # Gráfico de densidad
+        fig2, ax2 = plt.subplots(figsize=(10, 5))
+        ax2.plot(df['ventana'], df['densidad'], 'o-', color='green', linewidth=2, label='Densidad')
+        ax2.plot(df['ventana'], df['ratio_fuertes'], 's-', color='orange', linewidth=2, label='Ratio Fuertes')
+        ax2.axhline(y=0.5, color='gray', linestyle=':', alpha=0.5, label='Densidad ideal ~50%')
+        ax2.set_xlabel('Ventana (sorteos)')
+        ax2.set_ylabel('Proporción')
+        ax2.set_title('Densidad y Pares Fuertes')
+        ax2.legend()
+        ax2.grid(alpha=0.3)
+        st.pyplot(fig2)
+    
+    # Recomendación
+    optimo = df.loc[df['score'].idxmax()]
+    st.success(f"""
+    🎯 **Recomendación para tu dataset:**
+    
+    | Métrica | Valor |
+    |---------|-------|
+    | **Ventana óptima** | **{optimo['ventana']} sorteos** |
+    | Densidad de pares | {optimo['densidad']:.1%} |
+    | Pares fuertes | {optimo['pares_fuertes']} ({optimo['ratio_fuertes']:.1%}) |
+    | Estabilidad | {optimo['estabilidad']:.2f} |
+    | Poder predictivo | {optimo['tasa_prediccion']:.1%} |
+    
+    💡 **Esta ventana ha sido guardada automáticamente** en el parámetro "Ventana dinámica".
+    """)
+    
+    return int(optimo['ventana'])
+
+# ============================================================================
+# 📊 8. SCORING Y RANKING
 # ============================================================================
 
 def puntuar_y_rankear(combinations, numero_a_atraso, numero_a_frecuencia, total_atraso, 
@@ -634,7 +797,7 @@ def puntuar_y_rankear(combinations, numero_a_atraso, numero_a_frecuencia, total_
     return sorted(scored, key=lambda x: x["Puntuación"], reverse=True)
 
 # ============================================================================
-# 🤖 8. GEMINI API (SIN DEPENDENCIA DE TABULATE)
+# 🤖 9. GEMINI API
 # ============================================================================
 
 def configurar_gemini(api_key):
@@ -650,8 +813,6 @@ def dataframe_a_markdown_simple(df):
     """Convierte DataFrame a Markdown sin depender de tabulate."""
     if df is None or df.empty:
         return "Sin datos disponibles"
-    
-    # Usar método nativo de pandas
     return df.to_markdown(index=False) if hasattr(df, 'to_markdown') else df.to_string(index=False)
 
 def analizar_con_gemini(combinaciones_top, contexto_sistema, api_key, modelo="gemini-2.0-flash"):
@@ -663,7 +824,6 @@ def analizar_con_gemini(combinaciones_top, contexto_sistema, api_key, modelo="ge
             cols = ['Combinación', 'Puntuación', 'suma', 'cv_atraso', 'calculo_especial']
             if 'tension_gumbel_promedio' in combinaciones_top[0]:
                 cols += ['tension_gumbel_promedio']
-            
             df_top = pd.DataFrame(combinaciones_top[:15])[cols]
             datos_markdown = dataframe_a_markdown_simple(df_top)
         else:
@@ -691,9 +851,9 @@ def responder_chat_gemini(pregunta, contexto_datos, resultados_recientes, api_ke
         return "⚠️ Instala google-generativeai"
     
     try:
-        prompt = f"""Eres asistente del Agente Predictivo v3.1.
+        prompt = f"""Eres asistente del Agente Predictivo v3.2.
 
-📚 SISTEMA: Homeostasis + Gumbel + Validación Temporal + Patrones
+📚 SISTEMA: Homeostasis + Gumbel + Validación Temporal + Patrones + Ventana Óptima
 📊 CONTEXTO: {contexto_datos}
 📈 RESULTADOS: {resultados_recientes}
 ❓ PREGUNTA: "{pregunta}"
@@ -707,7 +867,7 @@ Responde en español, técnico pero accesible."""
         return f"❌ Error: {str(e)}"
 
 # ============================================================================
-# 🖥️ 9. INTERFAZ PRINCIPAL
+# 🖥️ 10. INTERFAZ PRINCIPAL
 # ============================================================================
 
 def main():
@@ -717,19 +877,19 @@ def main():
         'ultimo_analisis_gemini': None, 'numero_a_tension': {},
         'gumbel_params': (10, 5), 'contexto_app': {}, 'gemini_configured': False,
         'datos_cargados': False, 'chat_history': [],
-        'parametros_generacion': {'ventana': 50, 'factor_escala': 1.5, 'peso_gumbel': 0.3, 
-                                  'n_candidatos': 50000, 'top_n': 15, 'usar_paralelo': False,
+        'parametros_generacion': {'ventana': 40, 'factor_escala': 1.5, 'peso_gumbel': 0.3, 
+                                  'n_candidatos': 20000, 'top_n': 15, 'usar_paralelo': False,
                                   'usar_compuesta': True, 'usar_patrones': True},
         'ejecucion_completada': False, 'patrones_validos': None,
-        'validacion_resultados': None, 'n_workers': 2
+        'validacion_resultados': None, 'n_workers': 2, 'ventana_optima_calculada': False
     }
     
     for key, valor in estados_iniciales.items():
         if key not in st.session_state:
             st.session_state[key] = valor
     
-    st.title("🤖 Agente Predictivo v3.1")
-    st.markdown("*Optimizado para 100-150 sorteos*")
+    st.title("🤖 Agente Predictivo v3.2")
+    st.markdown("*Con Calibrador de Ventana Óptima*")
     
     # SIDEBAR
     with st.sidebar:
@@ -765,14 +925,20 @@ def main():
         # ⚡ Generación
         st.subheader("⚡ Generación")
         n_candidatos = st.number_input("Candidatos", 1000, 500000, 20000)
-        ventana = st.slider("Ventana dinámica", 10, 200, 40)
+        
+        # 🎯 VENTANA DINÁMICA (con indicador de si fue calibrada)
+        if st.session_state.ventana_optima_calculada:
+            st.success("✅ Ventana calibrada automáticamente")
+        
+        ventana = st.slider("Ventana dinámica", 10, 200, st.session_state.parametros_generacion['ventana'])
+        st.session_state.parametros_generacion['ventana'] = ventana
+        
         top_n = st.number_input("Top a mostrar", 5, 250, 15)
         
         usar_paralelo = st.checkbox("Generación paralela", value=False, help="Activar para >100k")
         usar_patrones = st.checkbox("Filtrar patrones", value=True)
         n_workers = st.slider("Núcleos CPU", 1, 8, 2)
         
-        st.session_state.parametros_generacion['ventana'] = ventana
         st.session_state.parametros_generacion['n_candidatos'] = n_candidatos
         st.session_state.parametros_generacion['top_n'] = top_n
         st.session_state.parametros_generacion['usar_paralelo'] = usar_paralelo
@@ -781,16 +947,39 @@ def main():
         
         st.divider()
         
+        # 🎯 CALIBRADOR DE VENTANA (NUEVO)
+        st.subheader("🎯 Calibrar Ventana")
+        st.caption("Encuentra la ventana óptima para correlaciones")
+        
+        if st.button("🔬 Calcular Ventana Óptima", type="secondary"):
+            if st.session_state.datos_cargados and len(st.session_state.hs) >= 50:
+                with st.spinner("Analizando correlaciones dinámicas..."):
+                    ventana_optima = analizar_ventana_optima(
+                        st.session_state.hs,
+                        st.session_state.na,
+                        ventanas_prueba=[25, 30, 35, 40, 45, 50, 60]
+                    )
+                    if ventana_optima:
+                        st.session_state.parametros_generacion['ventana'] = ventana_optima
+                        st.session_state.ventana_optima_calculada = True
+                        st.success(f"✅ Ventana actualizada a {ventana_optima} sorteos")
+                        st.info("💡 La ventana se aplicará en la próxima generación")
+                        st.rerun()
+            else:
+                st.error("❌ Necesitas al menos 50 sorteos cargados")
+        
+        st.divider()
+        
         # 🧪 Validación
         st.subheader("🧪 Validación")
         n_ventanas_val = st.number_input("Ventanas validación", 1, 5, 2)
         
         st.info("""
-        **✨ v3.1 Optimizado**
+        **✨ v3.2 Mejoras**
+        • ✅ Calibrador de ventana óptima
         • ✅ Auto-ajuste para datasets pequeños
-        • ✅ 50-200 sorteos soportados
+        • ✅ Validación temporal adaptada
         • ✅ Sin dependencia tabulate crítica
-        • ✅ Debugging mejorado
         """)
     
     # CARGA DE ARCHIVOS
@@ -809,6 +998,17 @@ def main():
                  st.session_state.ta, st.session_state.hs) = datos
                 st.session_state.datos_cargados = True
                 st.success("✅ Archivos cargados")
+                
+                # Auto-ajustar ventana inicial según tamaño del dataset
+                total_sorteos = len(st.session_state.hs)
+                if total_sorteos < 100:
+                    ventana_inicial = 35
+                elif total_sorteos < 200:
+                    ventana_inicial = 45
+                else:
+                    ventana_inicial = 60
+                st.session_state.parametros_generacion['ventana'] = ventana_inicial
+                st.info(f"📊 Ventana inicial auto-ajustada a {ventana_inicial} sorteos")
                 st.rerun()
             else:
                 st.error("❌ Error cargando archivos.")
@@ -828,7 +1028,9 @@ def main():
     with col_d3:
         st.metric("Atraso Total", st.session_state.ta)
     
-    if len(st.session_state.hs) < 100:
+    if len(st.session_state.hs) < 50:
+        st.error("⚠️ Dataset muy pequeño (<50 sorteos). Se recomienda mínimo 50 para calibrar ventana.")
+    elif len(st.session_state.hs) < 100:
         st.warning("⚠️ Dataset pequeño (<100 sorteos). La validación será limitada.")
     elif len(st.session_state.hs) < 200:
         st.info("📦 Dataset mediano (100-200 sorteos). Validación adaptada activada.")
@@ -889,6 +1091,8 @@ def main():
             usar_paralelo = params.get('usar_paralelo', False)
             usar_patrones = params.get('usar_patrones', True)
             n_workers = st.session_state.n_workers
+            
+            st.info(f"⚙️ Configuración: Ventana={ventana}, Candidatos={n_candidatos:,}, Patrones={'✅' if usar_patrones else '❌'}")
             
             # Parámetros Gumbel
             delays = list(st.session_state.ac.keys())
@@ -951,7 +1155,7 @@ def main():
                 elapsed = time.time() - start
                 st.success(f"✅ Completado en {elapsed:.2f}s | {len(ranking):,} combinaciones")
             else:
-                st.warning("⚠️ Sin combinaciones válidas.")
+                st.warning("⚠️ Sin combinaciones válidas. Ajusta parámetros.")
     
     # RESULTADOS
     if st.session_state.ejecucion_completada and st.session_state.df_resultados is not None:
@@ -968,14 +1172,14 @@ def main():
         # Descarga
         csv = df[cols].to_csv(index=False, encoding='utf-8-sig')
         st.download_button(label="📥 Descargar CSV", data=csv, 
-                          file_name=f"predicciones_v3.1.csv", mime="text/csv")
+                          file_name=f"predicciones_v3.2.csv", mime="text/csv")
         
         # GEMINI
         if st.session_state.get('gemini_configured', False):
             st.divider()
             st.subheader("🤖 Análisis con Gemini")
             
-            contexto = f"Dataset: {len(st.session_state.na)} números | Atraso: {st.session_state.ta}"
+            contexto = f"Dataset: {len(st.session_state.na)} números | Atraso: {st.session_state.ta} | Ventana: {st.session_state.parametros_generacion['ventana']}"
             
             if st.button("🔍 Analizar con Gemini", key="btn_gemini"):
                 with st.spinner("🤖 Analizando..."):
@@ -1009,7 +1213,7 @@ def main():
         
         with st.chat_message("assistant"):
             if st.session_state.get('gemini_configured', False) and st.session_state.datos_cargados:
-                ctx = f"Dataset: {len(st.session_state.na)} números"
+                ctx = f"Dataset: {len(st.session_state.na)} números | Ventana: {st.session_state.parametros_generacion['ventana']}"
                 res = "\n".join([f"• `{r.get('Combinación', '')}`" for r in (st.session_state.ranking_top or [])[:3]])
                 respuesta = responder_chat_gemini(prompt, ctx, res, api_key, modelo_gemini)
                 st.markdown(respuesta)
@@ -1021,6 +1225,8 @@ def main():
         st.write(f"• df_resultados: {'✅' if st.session_state.df_resultados is not None else '❌'}")
         st.write(f"• gemini_configured: {st.session_state.gemini_configured}")
         st.write(f"• datos_cargados: {st.session_state.datos_cargados}")
+        st.write(f"• ventana_actual: {st.session_state.parametros_generacion['ventana']}")
+        st.write(f"• ventana_calibrada: {st.session_state.ventana_optima_calculada}")
 
 if __name__ == "__main__":
     main()
