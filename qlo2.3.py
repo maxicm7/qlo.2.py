@@ -3,16 +3,101 @@ import pandas as pd
 import numpy as np
 from itertools import combinations
 from scipy.stats import gumbel_r
-from scipy.optimize import minimize
 import matplotlib.pyplot as plt
 import seaborn as sns
 import warnings
 import time
+import os
+from openai import OpenAI
 
 warnings.filterwarnings("ignore")
 sns.set_style("whitegrid")
 
-st.set_page_config(page_title="PIV-60 v4.0", page_icon="🔬", layout="wide")
+st.set_page_config(page_title="PIV-60 v5.0 + IA", page_icon="🤖", layout="wide")
+
+# =============================================================================
+# CONFIGURACIÓN DE API (LLM)
+# =============================================================================
+
+def get_llm_client():
+    """Inicializa cliente de OpenAI o alternativa"""
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        api_key = st.secrets.get("OPENAI_API_KEY", None)
+    if api_key:
+        return OpenAI(api_key=api_key)
+    return None
+
+def analizar_con_llm(client, top_combinaciones, config, historial_stats):
+    """
+    Envía las top combinaciones al LLM para análisis cualitativo.
+    Retorna insights en lenguaje natural.
+    """
+    if not client:
+        return None
+    
+    prompt = f"""
+Eres un experto en estadística aplicada, teoría de valores extremos y análisis de sistemas estocásticos.
+
+## CONTEXTO DEL SISTEMA PIV-60
+- Universo: 46 números (0-45)
+- Sorteo: 6 números
+- Protocolo: PIV-60 (Ingeniería Probabilística)
+- Combinaciones analizadas: {len(top_combinaciones)}
+
+## PARÁMETROS CALIBRADOS
+- Gumbel μ={config['gumbel_mu']:.2f}, β={config['gumbel_beta']:.2f}
+- Gauss μ={config['gauss_mean']:.1f}, σ={config['gauss_std']:.1f}
+- Pesos IPC: Hist={config['omega_hist']}, Rec={config['omega_rec']}, Gumbel={config['omega_gum']}
+
+## ESTADÍSTICAS HISTÓRICAS
+{historial_stats}
+
+## TOP 5 COMBINACIONES CON MÉTRICAS
+{format_top_combos_for_llm(top_combinaciones[:5])}
+
+## TAREA
+Analiza estas combinaciones y responde:
+
+1. **¿Cuál combinación tiene el perfil estadístico más sólido?** (considerando balance entre IPC, zona energética, y distribución de atrasos)
+
+2. **¿Qué patrones observas en las combinaciones mejor rankeadas?** (ej: predominio de números fríos/calientes, suma concentrada, etc.)
+
+3. **¿Hay alguna anomalía o riesgo en estas predicciones?** (ej: sobre-dependencia de un número, suma muy extrema, etc.)
+
+4. **Recomendación final:** Si tuvieras que seleccionar UNA combinación para jugar, ¿cuál sería y por qué?
+
+Sé honesto sobre las limitaciones: ningún modelo puede predecir sorteos aleatorios con certeza. Esto es análisis estadístico, no predicción mágica.
+
+Responde en español, de forma clara y estructurada.
+"""
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",  # O "gpt-4-turbo", "claude-3-opus", etc.
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,  # Bajo para análisis más conservador
+            max_tokens=1500
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        return f"Error en análisis LLM: {str(e)}"
+
+def format_top_combos_for_llm(combos):
+    """Formatea combinaciones para el prompt del LLM"""
+    text = ""
+    for i, c in enumerate(combos, 1):
+        text += f"""
+#{i}: {c['Combinación']}
+   - Score: {c['Score']:.4f} | IPC: {c['IPC']:.4f}
+   - Zona: {c['Zona']} | S: {c['S']:.1f}
+   - Suma: {c['Suma']} | Atrasos: {[c[f'N{j}'] for j in range(1,7)]}
+"""
+    return text
+
+# =============================================================================
+# CLASE PIV-60 (igual que v4.0)
+# =============================================================================
 
 class CalibradorDinamicoPIV60:
     def __init__(self, df_historial, df_datos):
@@ -21,7 +106,6 @@ class CalibradorDinamicoPIV60:
         self.config = {}
         
     def _procesar_historial(self, df):
-        # CORREGIR HEADERS DUPLICADOS
         cols = df.columns.tolist()
         unique_cols = []
         seen = {}
@@ -68,13 +152,9 @@ class CalibradorDinamicoPIV60:
         sumas = [sum(sorteo) for sorteo in self.historial]
         return np.mean(sumas), np.std(sumas)
 
-    def optimizar_pesos_ipc(self):
-        return 0.25, 0.40, 0.35
-
     def ejecutar_calibracion(self):
         mu, beta = self.calcular_parametros_gumbel()
         g_mean, g_std = self.calcular_parametros_gauss()
-        w1, w2, w3 = self.optimizar_pesos_ipc()
         
         Cs_hist = []
         for i in range(60, len(self.historial)):
@@ -90,7 +170,7 @@ class CalibradorDinamicoPIV60:
         self.config = {
             'gumbel_mu': mu, 'gumbel_beta': beta,
             'gauss_mean': g_mean, 'gauss_std': max(g_std, 20),
-            'omega_hist': w1, 'omega_rec': w2, 'omega_gum': w3,
+            'omega_hist': 0.25, 'omega_rec': 0.40, 'omega_gum': 0.35,
             'zona_inercia': p75, 'zona_equilibrio': (p25, p75), 'zona_ruptura': p25,
             'constante_k': 40
         }
@@ -134,14 +214,28 @@ def calcular_IPC_calibrado(combinacion, datos, config):
     return {'IPC_Total': ipc, 'F_hist': F_hist, 'V_60': V_60, 'T_g': T_g, 
             'phi_gauss': phi_gauss, 'suma': suma}
 
-# ==================== INTERFAZ ====================
-st.title("🔬 Protocolo PIV-60 v4.0 - Auto-Calibración")
-st.markdown("**Documento:** PIP-2026-X46")
+# =============================================================================
+# INTERFAZ STREAMLIT
+# =============================================================================
+
+st.title("🤖 PIV-60 v5.0 + IA Analítica")
+st.markdown("**Documento:** PIP-2026-X46 | **IA:** Análisis Cualitativo con LLM")
 
 with st.sidebar:
-    st.header("📁 Carga de Archivos")
+    st.header("📁 Archivos")
     archivo_historial = st.file_uploader("Historial_Tradicional.csv", type=['csv'], key='hist')
     archivo_datos = st.file_uploader("datos_actuales.csv", type=['csv'], key='datos')
+    
+    st.markdown("---")
+    st.header("🤖 Configuración IA")
+    usar_llm = st.checkbox("Activar análisis con LLM", value=False)
+    
+    api_key_input = st.text_input("OpenAI API Key (opcional)", type="password", 
+                                   help="Déjalo vacío si configuraste OPENAI_API_KEY en secrets")
+    
+    if api_key_input:
+        os.environ["OPENAI_API_KEY"] = api_key_input
+    
     st.markdown("---")
     top_n = st.slider("Top combinaciones", 5, 50, 15)
     ejecutar = st.button("🚀 Ejecutar", type="primary", use_container_width=True)
@@ -186,8 +280,7 @@ if ejecutar:
             suma_atrasos = sum(info['atraso'] for info in datos.values())
             C_actual = suma_atrasos + config['constante_k']
             
-            st.info(f"📊 Clasificación: **Momento**={len(momento)}, **Masa Crítica**={len(masa)}, **Tensión Crítica (≥15)**={len(tension)}")
-            st.write(f"   • Tensión: {sorted(tension)}")
+            st.info(f"📊 Clasificación: **Momento**={len(momento)}, **Masa**={len(masa)}, **Tensión**={len(tension)}")
             
             combinaciones = []
             for m in momento:
@@ -201,19 +294,10 @@ if ejecutar:
             
             # Filtrar y rankear
             resultados = []
-            combinaciones_filtradas_gauss = 0
-            
             for combo in combinaciones:
                 suma_combo = sum(combo)
-                
-                # FILTRO GAUSSIANO FIJO (Protocolo PIV-60 original)
-                gauss_min = 100
-                gauss_max = 170
-                
-                if not (gauss_min <= suma_combo <= gauss_max):
+                if not (100 <= suma_combo <= 170):
                     continue
-                
-                combinaciones_filtradas_gauss += 1
                     
                 atrasos_c = [datos[n]['atraso'] for n in combo]
                 S = C_actual - sum(atrasos_c)
@@ -231,8 +315,7 @@ if ejecutar:
                 score = ipc_d['IPC_Total'] * peso_z
                 
                 resultados.append({
-                    'Rank': 0,
-                    'Combinación': ' - '.join(map(str, combo)),
+                    'Rank': 0, 'Combinación': ' - '.join(map(str, combo)),
                     'N1': combo[0], 'N2': combo[1], 'N3': combo[2], 
                     'N4': combo[3], 'N5': combo[4], 'N6': combo[5],
                     'Score': score, 'IPC': ipc_d['IPC_Total'],
@@ -241,12 +324,8 @@ if ejecutar:
                     'T_Gumbel': ipc_d['T_g'], 'Penal_Gauss': ipc_d['phi_gauss']
                 })
             
-            st.write(f"📊 Combinaciones que pasaron filtro Gaussiano (suma 100-170): {combinaciones_filtradas_gauss:,}")
-            
             if not resultados:
-                st.error("❌ No se generaron combinaciones válidas después del filtro Gaussiano.")
-                sumas = [sum(c) for c in combinaciones[:10000]]
-                st.info(f"💡 **Diagnóstico:** Rango de sumas encontrado: {min(sumas)} a {max(sumas)} (media: {np.mean(sumas):.1f})")
+                st.error("❌ No se generaron combinaciones válidas.")
                 st.stop()
             
             resultados.sort(key=lambda x: x['Score'], reverse=True)
@@ -255,7 +334,8 @@ if ejecutar:
             
             finalistas = resultados[:top_n]
             
-        # MOSTRAR TOP
+        # ==================== MOSTRAR RESULTADOS ====================
+        
         st.subheader(f"🏆 Top {top_n} Combinaciones")
         for i, item in enumerate(finalistas, 1):
             with st.expander(f"#{i:02d} | {item['Combinación']} | Score: {item['Score']:.4f}", expanded=(i<=5)):
@@ -270,29 +350,53 @@ if ejecutar:
                     st.write(f"**Rec:** {item['V_60']:.3f}")
                     st.write(f"**Gumbel:** {item['T_Gumbel']:.3f}")
         
-        # TABLA COMPLETA
+        # ==================== ANÁLISIS CON LLM ====================
+        
+        if usar_llm:
+            st.subheader("🤖 Análisis Inteligente con IA")
+            
+            with st.spinner("🧠 Consultando al modelo de lenguaje..."):
+                client = get_llm_client()
+                
+                if not client:
+                    st.warning("⚠️ No se encontró API Key de OpenAI. Configúrala en secrets o ingresa manualmente.")
+                else:
+                    # Preparar estadísticas históricas
+                    hist_stats = f"""
+                    - Total sorteos en historial: {len(historial)}
+                    - Suma promedio histórica: {np.mean([sum(s) for s in historial]):.1f}
+                    - Suma máxima histórica: {max([sum(s) for s in historial])}
+                    - Suma mínima histórica: {min([sum(s) for s in historial])}
+                    """
+                    
+                    analisis_llm = analizar_con_llm(client, finalistas, config, hist_stats)
+                    
+                    if analisis_llm:
+                        st.markdown("### 📝 Informe de la IA")
+                        st.markdown(analisis_llm)
+                        
+                        # Botón para descargar informe
+                        st.download_button(
+                            label="📥 Descargar Informe IA (Markdown)",
+                            data=analisis_llm,
+                            file_name="informe_ia_piv60.md",
+                            mime="text/markdown"
+                        )
+        
+        # ==================== TABLA Y DESCARGA ====================
+        
         st.subheader(f"📋 Todas las Combinaciones ({len(resultados):,})")
         df_resultados = pd.DataFrame(resultados)
         st.dataframe(df_resultados[['Rank', 'Combinación', 'Score', 'IPC', 'Zona', 'Suma', 'S']], 
                     use_container_width=True, height=600)
         
-        # DESCARGA CSV
         csv = df_resultados.to_csv(index=False, encoding='utf-8-sig')
         st.download_button(label=f"📥 Descargar CSV ({len(resultados):,} combinaciones)",
                           data=csv, file_name=f"PIV60_Resultados_{len(resultados)}.csv",
                           mime="text/csv")
         
-        # ESTADÍSTICAS
-        st.subheader("📊 Estadísticas")
-        col_s1, col_s2, col_s3 = st.columns(3)
-        with col_s1:
-            st.metric("Total", f"{len(resultados):,}")
-        with col_s2:
-            st.metric("Score Máx", f"{df_resultados['Score'].max():.4f}")
-        with col_s3:
-            st.metric("Score Prom", f"{df_resultados['Score'].mean():.4f}")
+        # ==================== MAPA DE CALOR ====================
         
-        # MAPA DE CALOR
         st.subheader("🎨 Mapa de Calor")
         numeros = sorted(list(datos.keys()))
         matriz = np.full((6, 8), np.nan)
@@ -317,3 +421,6 @@ if ejecutar:
         st.exception(e)
 else:
     st.info("👈 Sube los archivos y presiona Ejecutar")
+
+st.markdown("---")
+st.caption("⚠️ **Advertencia:** Este sistema es para investigación estadística. Ningún modelo puede garantizar aciertos en sorteos aleatorios.")
