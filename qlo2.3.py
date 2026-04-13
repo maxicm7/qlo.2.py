@@ -8,6 +8,8 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import warnings
 import time
+import base64
+from io import StringIO
 
 warnings.filterwarnings("ignore")
 sns.set_style("whitegrid")
@@ -23,7 +25,7 @@ st.set_page_config(
 )
 
 # =============================================================================
-# CLASE DE AUTO-CALIBRACIÓN (igual que antes)
+# CLASE DE AUTO-CALIBRACIÓN
 # =============================================================================
 
 class CalibradorDinamicoPIV60:
@@ -33,7 +35,7 @@ class CalibradorDinamicoPIV60:
         self.config = {}
         
     def _procesar_historial(self, df):
-        """Procesa el DataFrame del historial"""
+        df.columns = [c.replace('.1', '_2') if '.1' in c else c for c in df.columns]
         historial = []
         cols_nums = [c for c in df.columns if c.startswith('C')]
         for _, row in df.iterrows():
@@ -50,7 +52,6 @@ class CalibradorDinamicoPIV60:
         return historial
 
     def _procesar_datos(self, df):
-        """Procesa el DataFrame de datos actuales"""
         df.columns = df.columns.str.strip().str.lower()
         datos = {}
         for _, row in df.iterrows():
@@ -73,8 +74,6 @@ class CalibradorDinamicoPIV60:
         if len(self.historial) < 30:
             return 0.25, 0.40, 0.35
             
-        print("⚙️ Optimizando pesos IPC...")
-        
         def funcion_objetivo(pesos):
             w1, w2, w3 = pesos
             if w1 < 0 or w2 < 0 or w3 < 0 or abs(w1+w2+w3 - 1.0) > 0.01:
@@ -196,7 +195,7 @@ def calcular_IPC_calibrado(combinacion, datos, C_actual, config):
 st.title("🔬 Protocolo PIV-60 v4.0 - Auto-Calibración Dinámica")
 st.markdown("**Documento:** PIP-2026-X46 | **Clasificación:** Informe Técnico de Alta Precisión")
 
-# Sidebar para carga de archivos
+# Sidebar
 with st.sidebar:
     st.header("📁 Carga de Archivos")
     st.info("Sube ambos archivos CSV para comenzar")
@@ -206,7 +205,8 @@ with st.sidebar:
     
     st.markdown("---")
     st.markdown("**Parámetros:**")
-    top_n = st.slider("Top combinaciones a mostrar", 5, 20, 15)
+    top_n = st.slider("Top combinaciones a mostrar", 5, 100, 15)
+    mostrar_todas = st.checkbox("Mostrar todas las combinaciones filtradas", value=True)
     
     ejecutar = st.button("🚀 Ejecutar Análisis", type="primary", use_container_width=True)
 
@@ -216,7 +216,7 @@ if ejecutar:
         st.stop()
     
     try:
-        with st.spinner(" Cargando y procesando datos..."):
+        with st.spinner("📥 Cargando y procesando datos..."):
             df_hist = pd.read_csv(archivo_historial)
             df_datos = pd.read_csv(archivo_datos)
             
@@ -251,6 +251,8 @@ if ejecutar:
             suma_atrasos = sum(info['atraso'] for info in datos.values())
             C_actual = suma_atrasos + config['constante_k']
             
+            st.info(f"📊 Clasificación PIV-60: Momento={len(momento)}, Masa Crítica={len(masa)}, Tensión Crítica={len(tension)}")
+            
             combinaciones = []
             for m in momento:
                 for mc in combinations(masa, 4):
@@ -259,7 +261,9 @@ if ejecutar:
                         if len(set(combo)) == 6:
                             combinaciones.append(combo)
             
-            # Filtrar y rankear
+            st.write(f"✅ {len(combinaciones):,} combinaciones candidatas generadas bajo regla 1-4-1")
+            
+            # Filtrar y rankear TODAS las combinaciones
             resultados = []
             for combo in combinaciones:
                 suma_combo = sum(combo)
@@ -282,28 +286,92 @@ if ejecutar:
                 score = ipc_d['IPC_Total'] * peso_z
                 
                 resultados.append({
-                    'combo': combo, 'score': score, 'S': S, 'zona': zona, 'ipc': ipc_d
+                    'Rank': 0,
+                    'Combinación': ' - '.join(map(str, combo)),
+                    'N1': combo[0], 'N2': combo[1], 'N3': combo[2], 
+                    'N4': combo[3], 'N5': combo[4], 'N6': combo[5],
+                    'Score': score, 'IPC': ipc_d['IPC_Total'],
+                    'S': S, 'Zona': zona,
+                    'Suma': d['suma'],
+                    'F_Hist': d['F_hist'],
+                    'V_60': d['V_60'],
+                    'T_Gumbel': d['T_g'],
+                    'Penal_Gauss': d['phi_gauss']
                 })
             
-            resultados.sort(key=lambda x: x['score'], reverse=True)
+            # Ordenar
+            resultados.sort(key=lambda x: x['Score'], reverse=True)
+            
+            # Asignar ranks
+            for i, r in enumerate(resultados, 1):
+                r['Rank'] = i
+            
             finalistas = resultados[:top_n]
-        
-        # Mostrar resultados
+            
+        # ========== MOSTRAR TOP COMBINACIONES ==========
         st.subheader(f"🏆 Top {top_n} Combinaciones Recomendadas")
         
         for i, item in enumerate(finalistas, 1):
-            d = item['ipc']
-            with st.expander(f"#{i:02d} | {' - '.join(map(str, item['combo']))} | Score: {item['score']:.4f}", expanded=(i<=5)):
+            with st.expander(f"#{i:02d} | {item['Combinación']} | Score: {item['Score']:.4f}", expanded=(i<=5)):
                 col_a, col_b = st.columns(2)
                 with col_a:
-                    st.write(f"**Estado Energético:** {item['zona']}")
+                    st.write(f"**Estado Energético:** {item['Zona']}")
                     st.write(f"**Transición S:** {item['S']:.1f}")
-                    st.write(f"**Suma:** {d['suma']}")
+                    st.write(f"**Suma:** {item['Suma']}")
                 with col_b:
-                    st.write(f"**IPC Histórico:** {d['F_hist']:.3f}")
-                    st.write(f"**IPC Reciente:** {d['V_60']:.3f}")
-                    st.write(f"**IPC Gumbel:** {d['T_g']:.3f}")
-                    st.write(f"**Penalización Gauss:** -{d['phi_gauss']:.3f}")
+                    st.write(f"**IPC Total:** {item['IPC']:.4f}")
+                    st.write(f"**IPC Histórico:** {item['F_Hist']:.3f}")
+                    st.write(f"**IPC Reciente:** {item['V_60']:.3f}")
+                    st.write(f"**IPC Gumbel:** {item['T_Gumbel']:.3f}")
+        
+        # ========== TABLA COMPLETA DE COMBINACIONES ==========
+        if mostrar_todas:
+            st.subheader(f"📋 Todas las Combinaciones Filtradas ({len(resultados):,})")
+            st.info("💡 Las combinaciones están ordenadas por Score (mejor a peor)")
+            
+            # Crear DataFrame
+            df_resultados = pd.DataFrame(resultados)
+            
+            # Mostrar tabla interactiva
+            st.dataframe(
+                df_resultados[['Rank', 'Combinación', 'Score', 'IPC', 'Zona', 'Suma', 'S']],
+                use_container_width=True,
+                height=600
+            )
+            
+            # Botón de descarga CSV
+            csv = df_resultados.to_csv(index=False, encoding='utf-8-sig')
+            st.download_button(
+                label=f"📥 Descargar {len(resultados):,} Combinaciones (CSV)",
+                data=csv,
+                file_name=f"PIV60_Combinaciones_{len(resultados)}_resultados.csv",
+                mime="text/csv",
+            )
+            
+            # Estadísticas
+            st.subheader("📊 Estadísticas del Lote")
+            col_s1, col_s2, col_s3, col_s4 = st.columns(4)
+            with col_s1:
+                st.metric("Total Combinaciones", f"{len(resultados):,}")
+            with col_s2:
+                st.metric("Score Máximo", f"{df_resultados['Score'].max():.4f}")
+            with col_s3:
+                st.metric("Score Promedio", f"{df_resultados['Score'].mean():.4f}")
+            with col_s4:
+                st.metric("Score Mínimo", f"{df_resultados['Score'].min():.4f}")
+            
+            # Distribución por zona
+            st.subheader(" Distribución por Zona Energética")
+            col_z1, col_z2, col_z3, col_z4 = st.columns(4)
+            zonas = df_resultados['Zona'].value_counts()
+            with col_z1:
+                st.metric("EQUILIBRIO", f"{zonas.get('EQUILIBRIO', 0):,}")
+            with col_z2:
+                st.metric("INERCIA", f"{zonas.get('INERCIA', 0):,}")
+            with col_z3:
+                st.metric("RUPTURA", f"{zonas.get('RUPTURA', 0):,}")
+            with col_z4:
+                st.metric("TRANSICIÓN", f"{zonas.get('TRANSICIÓN', 0):,}")
         
         # Mapa de calor
         st.subheader("🎨 Mapa de Calor de Atrasos")
@@ -325,7 +393,7 @@ if ejecutar:
         
         st.pyplot(fig)
         
-        # Estadísticas resumen
+        # Estadísticas del sistema
         st.subheader("📊 Estadísticas del Sistema")
         atrasos_vals = [info['atraso'] for info in datos.values()]
         col_s1, col_s2, col_s3, col_s4 = st.columns(4)
@@ -338,7 +406,7 @@ if ejecutar:
         with col_s4:
             st.metric("Atraso Máximo", max(atrasos_vals))
         
-        st.success(f"✅ Análisis completado en {time.time():.2f} segundos")
+        st.success(f"✅ Análisis completado exitosamente")
         
     except Exception as e:
         st.error(f"❌ Error: {str(e)}")
