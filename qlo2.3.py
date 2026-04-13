@@ -16,16 +16,20 @@ sns.set_style("whitegrid")
 st.set_page_config(page_title="PIV-60 v5.0 + Gemini", page_icon="🤖", layout="wide")
 
 # =============================================================================
-# CONFIGURACIÓN DE API (GEMINI 2.5)
+# CONFIGURACIÓN DE API (GEMINI) - MODELOS DISPONIBLES
 # =============================================================================
 
 def get_gemini_client(api_key):
-    """Inicializa cliente de Gemini"""
+    """Inicializa cliente de Gemini con modelo disponible"""
     if not api_key:
         return None
     genai.configure(api_key=api_key)
     try:
-        model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        # ✅ MODELOS DISPONIBLES (elige uno):
+        # 'gemini-1.5-flash' → Rápido y gratuito (RECOMENDADO)
+        # 'gemini-1.5-pro' → Más potente pero con límites
+        # 'gemini-pro' → Versión estable clásica
+        model = genai.GenerativeModel('gemini-1.5-flash')
         return model
     except Exception as e:
         st.error(f"Error configurando Gemini: {e}")
@@ -102,7 +106,6 @@ class CalibradorDinamicoPIV60:
         self.config = {}
         
     def _procesar_historial(self, df):
-        # CORREGIR HEADERS DUPLICADOS (C3 aparece 2 veces)
         cols = df.columns.tolist()
         unique_cols = []
         seen = {}
@@ -115,7 +118,6 @@ class CalibradorDinamicoPIV60:
                 unique_cols.append(col)
         df.columns = unique_cols
         
-        # Extraer columnas de números (C1, C3, C3_1, C4, C5, C6)
         historial = []
         num_cols = [c for c in df.columns if c.startswith('C') and c != 'Fecha']
         
@@ -218,8 +220,8 @@ def calcular_IPC_calibrado(combinacion, datos, config):
 # INTERFAZ STREAMLIT
 # =============================================================================
 
-st.title("🤖 PIV-60 v5.0 + Gemini 2.5")
-st.markdown("**Documento:** PIP-2026-X46 | **IA:** Google Gemini 2.5 Flash")
+st.title("🤖 PIV-60 v5.0 + Gemini IA")
+st.markdown("**Documento:** PIP-2026-X46 | **IA:** Google Gemini 1.5 Flash")
 
 with st.sidebar:
     st.header("📁 Archivos")
@@ -231,8 +233,16 @@ with st.sidebar:
     usar_llm = st.checkbox("Activar análisis con Gemini", value=False)
     
     api_key_input = st.text_input("Gemini API Key", type="password", 
-                                   help="Ingresa tu API Key de Gemini 2.5",
+                                   help="Obtén tu key en https://aistudio.google.com/app/apikey",
                                    value="")
+    
+    # Selector de modelo
+    modelo_seleccionado = st.selectbox(
+        "Modelo Gemini",
+        options=['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro'],
+        index=0,
+        help="Flash = rápido/gratuito, Pro = más potente"
+    )
     
     st.markdown("---")
     top_n = st.slider("Top combinaciones", 5, 50, 15)
@@ -271,7 +281,6 @@ if ejecutar:
             datos = calibrador.datos_actuales
             historial = calibrador.historial
             
-            # Debug: mostrar info del historial
             st.write(f"🔍 Historial cargado: {len(historial)} sorteos")
             if len(historial) > 0:
                 st.write(f"   • Primer sorteo: {historial[0]}")
@@ -285,6 +294,8 @@ if ejecutar:
             C_actual = suma_atrasos + config['constante_k']
             
             st.info(f"📊 Clasificación: **Momento**={len(momento)}, **Masa**={len(masa)}, **Tensión**={len(tension)}")
+            st.write(f"   • Momento (A=0): {sorted(momento)}")
+            st.write(f"   • Tensión (A≥15): {sorted(tension)}")
             
             combinaciones = []
             for m in momento:
@@ -296,7 +307,6 @@ if ejecutar:
             
             st.write(f"✅ {len(combinaciones):,} combinaciones generadas")
             
-            # Filtrar y rankear
             resultados = []
             for combo in combinaciones:
                 suma_combo = sum(combo)
@@ -357,18 +367,19 @@ if ejecutar:
         # ==================== ANÁLISIS CON GEMINI ====================
         
         if usar_llm:
-            st.subheader("🤖 Análisis Inteligente con Gemini 2.5")
+            st.subheader("🤖 Análisis Inteligente con Gemini")
             
             if not api_key_input:
                 st.warning("⚠️ Ingresa tu API Key de Gemini para activar el análisis con IA.")
             else:
-                with st.spinner("🧠 Consultando a Gemini 2.5..."):
-                    model = get_gemini_client(api_key_input)
+                with st.spinner("🧠 Consultando a Gemini..."):
+                    # Configurar con el modelo seleccionado
+                    genai.configure(api_key=api_key_input)
+                    model = genai.GenerativeModel(modelo_seleccionado)
                     
                     if not model:
                         st.error("❌ Error al configurar Gemini. Verifica tu API Key.")
                     else:
-                        # Preparar estadísticas históricas CON VALIDACIÓN
                         if historial and len(historial) > 0:
                             sumas_hist = [sum(s) for s in historial]
                             hist_stats = f"""
@@ -386,7 +397,7 @@ if ejecutar:
                         
                         analisis_gemini = analizar_con_gemini(model, finalistas, config, hist_stats)
                         
-                        if analisis_gemini:
+                        if analisis_gemini and not analisis_gemini.startswith("Error"):
                             st.markdown("### 📝 Informe de Gemini")
                             st.markdown(analisis_gemini)
                             
@@ -397,7 +408,9 @@ if ejecutar:
                                 mime="text/markdown"
                             )
                             
-                            st.success("✅ Análisis completado con Gemini 2.5")
+                            st.success("✅ Análisis completado con Gemini")
+                        else:
+                            st.error(analisis_gemini)
         
         # ==================== TABLA Y DESCARGA ====================
         
