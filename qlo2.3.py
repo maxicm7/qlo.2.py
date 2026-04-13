@@ -25,16 +25,14 @@ def get_gemini_client(api_key):
         return None
     genai.configure(api_key=api_key)
     try:
-        model = genai.GenerativeModel('gemini-2.0-flash-exp')  # O 'gemini-pro'
+        model = genai.GenerativeModel('gemini-2.0-flash-exp')
         return model
     except Exception as e:
         st.error(f"Error configurando Gemini: {e}")
         return None
 
 def analizar_con_gemini(model, top_combinaciones, config, historial_stats):
-    """
-    Envía las top combinaciones a Gemini para análisis cualitativo.
-    """
+    """Envía las top combinaciones a Gemini para análisis cualitativo."""
     if not model:
         return None
     
@@ -104,6 +102,7 @@ class CalibradorDinamicoPIV60:
         self.config = {}
         
     def _procesar_historial(self, df):
+        # CORREGIR HEADERS DUPLICADOS (C3 aparece 2 veces)
         cols = df.columns.tolist()
         unique_cols = []
         seen = {}
@@ -116,8 +115,10 @@ class CalibradorDinamicoPIV60:
                 unique_cols.append(col)
         df.columns = unique_cols
         
+        # Extraer columnas de números (C1, C3, C3_1, C4, C5, C6)
         historial = []
-        num_cols = [c for c in df.columns if c.startswith('C')]
+        num_cols = [c for c in df.columns if c.startswith('C') and c != 'Fecha']
+        
         for _, row in df.iterrows():
             nums = set()
             for c in num_cols:
@@ -129,6 +130,7 @@ class CalibradorDinamicoPIV60:
                     continue
             if len(nums) >= 5:
                 historial.append(sorted(nums))
+        
         return historial
 
     def _procesar_datos(self, df):
@@ -269,6 +271,12 @@ if ejecutar:
             datos = calibrador.datos_actuales
             historial = calibrador.historial
             
+            # Debug: mostrar info del historial
+            st.write(f"🔍 Historial cargado: {len(historial)} sorteos")
+            if len(historial) > 0:
+                st.write(f"   • Primer sorteo: {historial[0]}")
+                st.write(f"   • Último sorteo: {historial[-1]}")
+            
             momento = [n for n, info in datos.items() if info['atraso'] == 0]
             masa = [n for n, info in datos.items() if 1 <= info['atraso'] <= 9]
             tension = [n for n, info in datos.items() if info['atraso'] >= 15]
@@ -360,15 +368,21 @@ if ejecutar:
                     if not model:
                         st.error("❌ Error al configurar Gemini. Verifica tu API Key.")
                     else:
-                        # Preparar estadísticas históricas
-                        sumas_hist = [sum(s) for s in historial]
-                        hist_stats = f"""
-                        - Total sorteos en historial: {len(historial)}
-                        - Suma promedio histórica: {np.mean(sumas_hist):.1f}
-                        - Suma máxima histórica: {max(sumas_hist)}
-                        - Suma mínima histórica: {min(sumas_hist)}
-                        - Desviación estándar: {np.std(sumas_hist):.1f}
-                        """
+                        # Preparar estadísticas históricas CON VALIDACIÓN
+                        if historial and len(historial) > 0:
+                            sumas_hist = [sum(s) for s in historial]
+                            hist_stats = f"""
+                            - Total sorteos en historial: {len(historial)}
+                            - Suma promedio histórica: {np.mean(sumas_hist):.1f}
+                            - Suma máxima histórica: {max(sumas_hist)}
+                            - Suma mínima histórica: {min(sumas_hist)}
+                            - Desviación estándar: {np.std(sumas_hist):.1f}
+                            """
+                        else:
+                            hist_stats = """
+                            - Historial: No disponible
+                            - Usando configuración por defecto
+                            """
                         
                         analisis_gemini = analizar_con_gemini(model, finalistas, config, hist_stats)
                         
@@ -376,7 +390,6 @@ if ejecutar:
                             st.markdown("### 📝 Informe de Gemini")
                             st.markdown(analisis_gemini)
                             
-                            # Botón para descargar informe
                             st.download_button(
                                 label="📥 Descargar Informe Gemini (Markdown)",
                                 data=analisis_gemini,
