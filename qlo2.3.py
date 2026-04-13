@@ -26,7 +26,7 @@ def get_gemini_client(api_key):
     genai.configure(api_key=api_key)
     try:
         # ✅ MODELOS DISPONIBLES (elige uno):
-        # 'gemini-1.5-flash' → Rápido y gratuito (RECOMENDADO)
+        # 'gemini-2.5-flash' → Rápido y gratuito (RECOMENDADO)
         # 'gemini-1.5-pro' → Más potente pero con límites
         # 'gemini-pro' → Versión estable clásica
         model = genai.GenerativeModel('gemini-1.5-flash')
