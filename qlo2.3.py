@@ -221,7 +221,7 @@ def calcular_IPC_calibrado(combinacion, datos, config):
 # =============================================================================
 
 st.title("🤖 PIV-60 v5.0 + Gemini IA")
-st.markdown("**Documento:** PIP-2026-X46 | **IA:** Google Gemini 1.5 Flash")
+st.markdown("**Documento:** PIP-2026-X46 | **IA:** Google Gemini 2.5 Flash")
 
 with st.sidebar:
     st.header("📁 Archivos")
@@ -239,7 +239,7 @@ with st.sidebar:
     # Selector de modelo
     modelo_seleccionado = st.selectbox(
         "Modelo Gemini",
-        options=['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro'],
+        options=['gemini-2.5-flash', 'gemini-1.5-pro', 'gemini-pro'],
         index=0,
         help="Flash = rápido/gratuito, Pro = más potente"
     )
