@@ -8,32 +8,34 @@ import seaborn as sns
 import warnings
 import time
 import os
-from openai import OpenAI
+import google.generativeai as genai
 
 warnings.filterwarnings("ignore")
 sns.set_style("whitegrid")
 
-st.set_page_config(page_title="PIV-60 v5.0 + IA", page_icon="🤖", layout="wide")
+st.set_page_config(page_title="PIV-60 v5.0 + Gemini", page_icon="🤖", layout="wide")
 
 # =============================================================================
-# CONFIGURACIÓN DE API (LLM)
+# CONFIGURACIÓN DE API (GEMINI 2.5)
 # =============================================================================
 
-def get_llm_client():
-    """Inicializa cliente de OpenAI o alternativa"""
-    api_key = os.getenv("OPENAI_API_KEY")
+def get_gemini_client(api_key):
+    """Inicializa cliente de Gemini"""
     if not api_key:
-        api_key = st.secrets.get("OPENAI_API_KEY", None)
-    if api_key:
-        return OpenAI(api_key=api_key)
-    return None
+        return None
+    genai.configure(api_key=api_key)
+    try:
+        model = genai.GenerativeModel('gemini-2.0-flash-exp')  # O 'gemini-pro'
+        return model
+    except Exception as e:
+        st.error(f"Error configurando Gemini: {e}")
+        return None
 
-def analizar_con_llm(client, top_combinaciones, config, historial_stats):
+def analizar_con_gemini(model, top_combinaciones, config, historial_stats):
     """
-    Envía las top combinaciones al LLM para análisis cualitativo.
-    Retorna insights en lenguaje natural.
+    Envía las top combinaciones a Gemini para análisis cualitativo.
     """
-    if not client:
+    if not model:
         return None
     
     prompt = f"""
@@ -73,15 +75,10 @@ Responde en español, de forma clara y estructurada.
 """
     
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o",  # O "gpt-4-turbo", "claude-3-opus", etc.
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,  # Bajo para análisis más conservador
-            max_tokens=1500
-        )
-        return response.choices[0].message.content
+        response = model.generate_content(prompt)
+        return response.text
     except Exception as e:
-        return f"Error en análisis LLM: {str(e)}"
+        return f"Error en análisis Gemini: {str(e)}"
 
 def format_top_combos_for_llm(combos):
     """Formatea combinaciones para el prompt del LLM"""
@@ -91,12 +88,13 @@ def format_top_combos_for_llm(combos):
 #{i}: {c['Combinación']}
    - Score: {c['Score']:.4f} | IPC: {c['IPC']:.4f}
    - Zona: {c['Zona']} | S: {c['S']:.1f}
-   - Suma: {c['Suma']} | Atrasos: {[c[f'N{j}'] for j in range(1,7)]}
+   - Suma: {c['Suma']}
+   - Frec Hist: {c['F_Hist']:.3f} | Reciente: {c['V_60']:.3f} | Gumbel: {c['T_Gumbel']:.3f}
 """
     return text
 
 # =============================================================================
-# CLASE PIV-60 (igual que v4.0)
+# CLASE PIV-60
 # =============================================================================
 
 class CalibradorDinamicoPIV60:
@@ -218,8 +216,8 @@ def calcular_IPC_calibrado(combinacion, datos, config):
 # INTERFAZ STREAMLIT
 # =============================================================================
 
-st.title("🤖 PIV-60 v5.0 + IA Analítica")
-st.markdown("**Documento:** PIP-2026-X46 | **IA:** Análisis Cualitativo con LLM")
+st.title("🤖 PIV-60 v5.0 + Gemini 2.5")
+st.markdown("**Documento:** PIP-2026-X46 | **IA:** Google Gemini 2.5 Flash")
 
 with st.sidebar:
     st.header("📁 Archivos")
@@ -227,14 +225,12 @@ with st.sidebar:
     archivo_datos = st.file_uploader("datos_actuales.csv", type=['csv'], key='datos')
     
     st.markdown("---")
-    st.header("🤖 Configuración IA")
-    usar_llm = st.checkbox("Activar análisis con LLM", value=False)
+    st.header("🤖 Configuración Gemini")
+    usar_llm = st.checkbox("Activar análisis con Gemini", value=False)
     
-    api_key_input = st.text_input("OpenAI API Key (opcional)", type="password", 
-                                   help="Déjalo vacío si configuraste OPENAI_API_KEY en secrets")
-    
-    if api_key_input:
-        os.environ["OPENAI_API_KEY"] = api_key_input
+    api_key_input = st.text_input("Gemini API Key", type="password", 
+                                   help="Ingresa tu API Key de Gemini 2.5",
+                                   value="")
     
     st.markdown("---")
     top_n = st.slider("Top combinaciones", 5, 50, 15)
@@ -350,38 +346,45 @@ if ejecutar:
                     st.write(f"**Rec:** {item['V_60']:.3f}")
                     st.write(f"**Gumbel:** {item['T_Gumbel']:.3f}")
         
-        # ==================== ANÁLISIS CON LLM ====================
+        # ==================== ANÁLISIS CON GEMINI ====================
         
         if usar_llm:
-            st.subheader("🤖 Análisis Inteligente con IA")
+            st.subheader("🤖 Análisis Inteligente con Gemini 2.5")
             
-            with st.spinner("🧠 Consultando al modelo de lenguaje..."):
-                client = get_llm_client()
-                
-                if not client:
-                    st.warning("⚠️ No se encontró API Key de OpenAI. Configúrala en secrets o ingresa manualmente.")
-                else:
-                    # Preparar estadísticas históricas
-                    hist_stats = f"""
-                    - Total sorteos en historial: {len(historial)}
-                    - Suma promedio histórica: {np.mean([sum(s) for s in historial]):.1f}
-                    - Suma máxima histórica: {max([sum(s) for s in historial])}
-                    - Suma mínima histórica: {min([sum(s) for s in historial])}
-                    """
+            if not api_key_input:
+                st.warning("⚠️ Ingresa tu API Key de Gemini para activar el análisis con IA.")
+            else:
+                with st.spinner("🧠 Consultando a Gemini 2.5..."):
+                    model = get_gemini_client(api_key_input)
                     
-                    analisis_llm = analizar_con_llm(client, finalistas, config, hist_stats)
-                    
-                    if analisis_llm:
-                        st.markdown("### 📝 Informe de la IA")
-                        st.markdown(analisis_llm)
+                    if not model:
+                        st.error("❌ Error al configurar Gemini. Verifica tu API Key.")
+                    else:
+                        # Preparar estadísticas históricas
+                        sumas_hist = [sum(s) for s in historial]
+                        hist_stats = f"""
+                        - Total sorteos en historial: {len(historial)}
+                        - Suma promedio histórica: {np.mean(sumas_hist):.1f}
+                        - Suma máxima histórica: {max(sumas_hist)}
+                        - Suma mínima histórica: {min(sumas_hist)}
+                        - Desviación estándar: {np.std(sumas_hist):.1f}
+                        """
                         
-                        # Botón para descargar informe
-                        st.download_button(
-                            label="📥 Descargar Informe IA (Markdown)",
-                            data=analisis_llm,
-                            file_name="informe_ia_piv60.md",
-                            mime="text/markdown"
-                        )
+                        analisis_gemini = analizar_con_gemini(model, finalistas, config, hist_stats)
+                        
+                        if analisis_gemini:
+                            st.markdown("### 📝 Informe de Gemini")
+                            st.markdown(analisis_gemini)
+                            
+                            # Botón para descargar informe
+                            st.download_button(
+                                label="📥 Descargar Informe Gemini (Markdown)",
+                                data=analisis_gemini,
+                                file_name="informe_gemini_piv60.md",
+                                mime="text/markdown"
+                            )
+                            
+                            st.success("✅ Análisis completado con Gemini 2.5")
         
         # ==================== TABLA Y DESCARGA ====================
         
