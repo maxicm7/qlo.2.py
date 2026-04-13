@@ -29,7 +29,7 @@ def get_gemini_client(api_key):
         # 'gemini-2.5-flash' → Rápido y gratuito (RECOMENDADO)
         # 'gemini-1.5-pro' → Más potente pero con límites
         # 'gemini-pro' → Versión estable clásica
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-2.5-flash')
         return model
     except Exception as e:
         st.error(f"Error configurando Gemini: {e}")
