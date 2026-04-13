@@ -34,7 +34,6 @@ class CalibradorDinamicoPIV60:
                 unique_cols.append(col)
         df.columns = unique_cols
         
-        # Extraer columnas de números (C1, C3, C3_1, C4, C5, C6)
         historial = []
         num_cols = [c for c in df.columns if c.startswith('C')]
         for _, row in df.iterrows():
@@ -70,16 +69,13 @@ class CalibradorDinamicoPIV60:
         return np.mean(sumas), np.std(sumas)
 
     def optimizar_pesos_ipc(self):
-        if len(self.historial) < 30:
-            return 0.25, 0.40, 0.35
-        return 0.25, 0.40, 0.35  # Valores fijos por ahora
+        return 0.25, 0.40, 0.35
 
     def ejecutar_calibracion(self):
         mu, beta = self.calcular_parametros_gumbel()
         g_mean, g_std = self.calcular_parametros_gauss()
         w1, w2, w3 = self.optimizar_pesos_ipc()
         
-        # Calcular zonas de transición basadas en C histórico
         Cs_hist = []
         for i in range(60, len(self.historial)):
             estado = self._reconstruir_estado(i)
@@ -93,7 +89,7 @@ class CalibradorDinamicoPIV60:
         
         self.config = {
             'gumbel_mu': mu, 'gumbel_beta': beta,
-            'gauss_mean': g_mean, 'gauss_std': max(g_std, 20),  # Mínimo 20
+            'gauss_mean': g_mean, 'gauss_std': max(g_std, 20),
             'omega_hist': w1, 'omega_rec': w2, 'omega_gum': w3,
             'zona_inercia': p75, 'zona_equilibrio': (p25, p75), 'zona_ruptura': p25,
             'constante_k': 40
@@ -183,10 +179,9 @@ if ejecutar:
             datos = calibrador.datos_actuales
             historial = calibrador.historial
             
-            # Clasificación PIV-60
             momento = [n for n, info in datos.items() if info['atraso'] == 0]
             masa = [n for n, info in datos.items() if 1 <= info['atraso'] <= 9]
-            tension = [n for n, info in datos.items() if info['atraso'] >= 15]  # >= en lugar de >
+            tension = [n for n, info in datos.items() if info['atraso'] >= 15]
             
             suma_atrasos = sum(info['atraso'] for info in datos.values())
             C_actual = suma_atrasos + config['constante_k']
@@ -206,14 +201,19 @@ if ejecutar:
             
             # Filtrar y rankear
             resultados = []
+            combinaciones_filtradas_gauss = 0
+            
             for combo in combinaciones:
                 suma_combo = sum(combo)
-                # Filtro gaussiano relajado
-                gauss_min = config['gauss_mean'] - 3.0 * config['gauss_std']
-                gauss_max = config['gauss_mean'] + 3.0 * config['gauss_std']
+                
+                # FILTRO GAUSSIANO FIJO (Protocolo PIV-60 original)
+                gauss_min = 100
+                gauss_max = 170
                 
                 if not (gauss_min <= suma_combo <= gauss_max):
                     continue
+                
+                combinaciones_filtradas_gauss += 1
                     
                 atrasos_c = [datos[n]['atraso'] for n in combo]
                 S = C_actual - sum(atrasos_c)
@@ -241,8 +241,12 @@ if ejecutar:
                     'T_Gumbel': ipc_d['T_g'], 'Penal_Gauss': ipc_d['phi_gauss']
                 })
             
+            st.write(f"📊 Combinaciones que pasaron filtro Gaussiano (suma 100-170): {combinaciones_filtradas_gauss:,}")
+            
             if not resultados:
-                st.error("❌ No se generaron combinaciones. Verifica los filtros.")
+                st.error("❌ No se generaron combinaciones válidas después del filtro Gaussiano.")
+                sumas = [sum(c) for c in combinaciones[:10000]]
+                st.info(f"💡 **Diagnóstico:** Rango de sumas encontrado: {min(sumas)} a {max(sumas)} (media: {np.mean(sumas):.1f})")
                 st.stop()
             
             resultados.sort(key=lambda x: x['Score'], reverse=True)
