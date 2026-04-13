@@ -11,5 +11,6 @@ matplotlib
 tabulate
 seaborn
 google-generativeai
+openai
 
 
