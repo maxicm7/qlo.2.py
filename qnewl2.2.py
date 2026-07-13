@@ -69,7 +69,6 @@ def calcular_reglas_homeostaticas(historial_sets, atraso_map):
         metricas.append({'suma': sum(nums)})
     
     df_m = pd.DataFrame(metricas)
-    # Ampliamos a 3.2 para capturar sumas bajas/altas reales
     return {
         'suma': (df_m['suma'].mean() - 3.2 * df_m['suma'].std(), df_m['suma'].mean() + 3.2 * df_m['suma'].std())
     }
@@ -88,10 +87,7 @@ def get_dynamic_correlation(historial_sets, window):
                     corr_matrix[n2][n1] += 1
     return corr_matrix
 
-# --- 5, 6 y 7. MOTOR MASIVO 500k v4.8 (NUEVA LÓGICA) ---
-# ==============================================================================
 # --- 5, 6 y 7. MOTOR MASIVO 500k v4.8 (CON EQUILIBRIO DE TENSIÓN Y RACHA) ---
-# ==============================================================================
 def motor_500k_v48(n_combos, nums_disp, atraso_map, gumbel_map, corr_matrix, reglas, total_atraso, df_raw, col_a, col_n):
     candidatos = []
     nums_array = np.array(nums_disp)
@@ -115,10 +111,9 @@ def motor_500k_v48(n_combos, nums_disp, atraso_map, gumbel_map, corr_matrix, reg
             
             # 1. Medidas de Tensión Colectiva (Gumbel)
             mean_tension = np.mean(tensiones_g)
-            std_tension = np.std(tensiones_g) # Coexistencia de fríos y calientes
+            std_tension = np.std(tensiones_g) 
             
             # 2. Fórmula de Balance de Atraso (Usuario)
-            # Normalizado para armonizar con la escala de Gumbel
             calc_especial = (total_atraso + 40) - sum(atrasos_c)
             
             # 3. Coeficiente de Socios (Correlación Dinámica)
@@ -128,12 +123,11 @@ def motor_500k_v48(n_combos, nums_disp, atraso_map, gumbel_map, corr_matrix, reg
             n_calientes = len(combo_set.intersection(calientes))
             
             # --- NUEVA LÓGICA DE SCORE EQUILIBRADO ---
-            # Se equilibra la tensión promedio, la dispersión interna y los números en racha
             score = (mean_tension * 50) + (std_tension * 20) + (corr * 15) + (n_calientes * 10) + (calc_especial / 1000)
             
             candidatos.append({
                 'Combinación': sorted(combo.tolist()),
-                'Tension_Gumbel': round(mean_tension, 4), # Mantenemos el nombre de columna original
+                'Tension_Gumbel': round(mean_tension, 4), 
                 'Dispersion_Tension': round(std_tension, 4),
                 'Socios_Score': corr,
                 'En_Racha': n_calientes,
@@ -143,7 +137,7 @@ def motor_500k_v48(n_combos, nums_disp, atraso_map, gumbel_map, corr_matrix, reg
             
     return pd.DataFrame(candidatos).sort_values('Score_IA', ascending=False)
     
-            # --- INTERFAZ STREAMLIT ---
+# --- INTERFAZ STREAMLIT ---
 st.set_page_config(layout="wide", page_title="Agente Predictivo v4.8")
 
 with st.sidebar:
@@ -177,9 +171,33 @@ if f_data and f_hist:
             with st.spinner("Calculando Gumbel, Socios y Rachas..."):
                 df_final = motor_500k_v48(n_generar, list(na.keys()), na, tg, corr_matrix, reglas, ta, df_raw, col_atraso, col_numero)
                 st.session_state.df_final = df_final
-                st.success(f"Análisis finalizado en {time.time()-start:.2f}s")
-                st.write("### 🏆 Top Combinaciones Sugeridas")
-                st.dataframe(df_final.head(40), use_container_width=True)
+                st.session_state.exec_time = time.time() - start
+
+        # MÓDULO DE RESULTADOS PERSISTENTE
+        if 'df_final' in st.session_state:
+            st.success(f"Análisis finalizado en {st.session_state.exec_time:.2f}s")
+            
+            # Columnas organizadas para visualización y descarga
+            col_tabla, col_descarga = st.columns([3, 1])
+            
+            with col_tabla:
+                st.write("### 🏆 Top Combinaciones Sugeridas (Vista Previa - 40 Mejores)")
+                st.dataframe(st.session_state.df_final.head(40), use_container_width=True)
+            
+            with col_descarga:
+                st.write("### 💾 Exportar Datos")
+                st.info(f"El archivo contiene las {len(st.session_state.df_final):,} combinaciones que superaron las reglas homeostáticas.")
+                
+                # Conversión a formato CSV descargable
+                csv_file = st.session_state.df_final.to_csv(index=False).encode('utf-8')
+                
+                st.download_button(
+                    label="📥 Descargar Base Completa (CSV)",
+                    data=csv_file,
+                    file_name=f"analisis_completo_v4.8_{n_generar}_combos.csv",
+                    mime="text/csv",
+                    key="btn_descarga_persistente"
+                )
 
         # Análisis Gemini
         if api_key and 'df_final' in st.session_state:
