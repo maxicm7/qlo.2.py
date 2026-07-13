@@ -89,7 +89,7 @@ def get_dynamic_correlation(historial_sets, window):
     return corr_matrix
 
 # --- 5, 6 y 7. MOTOR MASIVO 500k v4.8 (NUEVA LÓGICA) ---
-def motor_500k_v48(n_combos, nums_disp, atraso_map, gumbel_map, corr_matrix, reglas, total_atraso, df_raw, col_a, col_n):
+def motor_500k_v48_modificado(n_combos, nums_disp, atraso_map, gumbel_map, corr_matrix, reglas, total_atraso, df_raw, col_a, col_n):
     candidatos = []
     nums_array = np.array(nums_disp)
     
@@ -101,39 +101,47 @@ def motor_500k_v48(n_combos, nums_disp, atraso_map, gumbel_map, corr_matrix, reg
         batch = np.array([np.random.choice(nums_array, 6, replace=False) for _ in range(batch_size)])
         sumas = batch.sum(axis=1)
         
-        # Filtrado Homeostático Flexible
+        # Filtrado Homeostático basado en el historial
         mask = (sumas >= reglas['suma'][0]) & (sumas <= reglas['suma'][1])
         batch = batch[mask]
         
         for combo in batch:
             combo_set = set(combo)
             atrasos_c = [atraso_map[n] for n in combo]
+            tensiones_g = [gumbel_map[n] for n in combo]
             
-            # FÓRMULA USUARIO: (Total + 40) - SumaAtrasosCombo
+            # 1. Medidas de Tensión Colectiva
+            mean_tension = np.mean(tensiones_g)
+            # Medimos la dispersión: combinación de elementos cargados y descargados
+            std_tension = np.std(tensiones_g) 
+            
+            # 2. Fórmula de Balance de Atraso (Usuario)
+            # Se normaliza para evitar que compita desproporcionadamente con la tensión de Gumbel
             calc_especial = (total_atraso + 40) - sum(atrasos_c)
             
-            # Tensión Gumbel
-            tension = np.mean([gumbel_map[n] for n in combo])
-            
-            # Bono por números en racha (Calientes)
-            n_calientes = len(combo_set.intersection(calientes))
-            
-            # Correlación de Socios
+            # 3. Coeficiente de Socios (Correlación)
             corr = sum(corr_matrix[combo[i]][combo[j]] for i in range(6) for j in range(i+1, 6))
             
-            # SCORE FINAL v4.8 (Balanceado para capturar rachas y tensión)
-            score = (tension * 60) + (corr * 20) + (n_calientes * 15) + (calc_especial / 450)
+            # 4. Cantidad de números en racha
+            n_calientes = len(combo_set.intersection(calientes))
+            
+            # --- NUEVA LÓGICA DE SCORE EQUILIBRADO ---
+            # - Se premia la tensión promedio (acumulación de energía)
+            # - Se premia la desviación estándar (heterogeneidad: mezclar fríos y calientes)
+            # - Se reduce el peso de calc_especial para que actúe como modulador y no como contra-fuerza
+            score = (mean_tension * 50) + (std_tension * 20) + (corr * 15) + (n_calientes * 10) + (calc_especial / 1000)
             
             candidatos.append({
                 'Combinación': sorted(combo.tolist()),
-                'Tension_Gumbel': round(tension, 4),
+                'Tension_Gumbel_Media': round(mean_tension, 4),
+                'Dispersion_Tension': round(std_tension, 4),
                 'Socios_Score': corr,
                 'En_Racha': n_calientes,
                 'Formula_Usuario': calc_especial,
                 'Score_IA': score
             })
+            
     return pd.DataFrame(candidatos).sort_values('Score_IA', ascending=False)
-
 # --- INTERFAZ STREAMLIT ---
 st.set_page_config(layout="wide", page_title="Agente Predictivo v4.8")
 
