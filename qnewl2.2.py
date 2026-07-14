@@ -173,7 +173,20 @@ with st.sidebar:
         min_value=0, max_value=100, value=25, step=5,
         help="Ajusta el peso de su fórmula matemática en el cálculo del Score final."
     )
+    st.subheader("📐 Influencia de Variables")
+    peso_formula = st.slider(
+        "Influencia de Fórmula Especial (%)",
+        min_value=0, max_value=100, value=25, step=5,
+        help="Ajusta el peso de su fórmula matemática en el cálculo del Score final."
+    )
     
+    st.subheader("🧠 Configuración de IA")
+    modelo_seleccionado = st.selectbox(
+        "Seleccione Modelo Gemini",
+        options=["gemini-3.1-flash", "gemini-3.1-flash-lite", "gemini-2.5-pro"],
+        index=0,
+        help="gemini-1.5-pro se recomienda para análisis de alta complejidad en cuentas de pago."
+    )
     st.divider()
     if st.button("Limpiar Caché"):
         st.cache_data.clear()
@@ -239,42 +252,42 @@ if f_data and f_hist:
                     mime="text/csv",
                     key="btn_descarga_persistente"
                 )
-
 # ==============================================================================
-        # --- ANÁLISIS GEMINI (PROTEGIDO) ---
+        # --- ANÁLISIS GEMINI (CON TRANSPORTE HTTP SEGURO) ---
         # ==============================================================================
-if api_key and 'df_final' in st.session_state:
-    st.divider()
-    if st.button("🧠 Consultar Veredicto Gemini 2.5 Flash"):
-        top_context = st.session_state.df_final.head(20).to_string()
-        
-        try:
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel('gemini-2.5-flash')
-            
-            prompt = f"""
-            Analiza bajo el proceso: Gumbel, Homeostasis Flexible y Correlación Dinámica.
-            Top 20 Datos: {top_context}
-            Atraso Total: {ta}. Parámetros Gumbel: mu={mu_g}, beta={beta_g}.
-            
-            Instrucción: Identifica la combinación ganadora. El sistema ahora valora números en racha (poco atraso) si tienen socios fuertes y alta tensión de Gumbel en el resto del conjunto.
-            """
-            
-            with st.spinner("IA analizando patrones complejos..."):
-                res = model.generate_content(prompt)
-                st.info(res.text)
+        if api_key and 'df_final' in st.session_state:
+            st.divider()
+            if st.button("🧠 Consultar Veredicto Gemini"):
+                top_context = st.session_state.df_final.head(20).to_string()
                 
-        except Exception as e:
-            st.error(f"""
-            ⚠️ **Error al conectar con la API de Gemini:**
-            
-            Detalle del problema: `{e}`
-            
-            *Por favor, verifique si su API Key es correcta, si tiene conexión a internet o si ha excedido su límite de consultas gratuitas.*
-            """)
+                try:
+                    # 'transport="rest"' fuerza el uso de HTTPS estándar evitando bloqueos de gRPC en la nube
+                    genai.configure(api_key=api_key, transport="rest")
+                    model = genai.GenerativeModel(modelo_seleccionado)
+                    
+                    prompt = f"""
+                    Analiza bajo el proceso: Gumbel, Homeostasis Flexible y Correlación Dinámica.
+                    Top 20 Datos: {top_context}
+                    Atraso Total: {ta}. Parámetros Gumbel: mu={mu_g}, beta={beta_g}.
+                    
+                    Instrucción: Identifica la combinación ganadora. El sistema ahora valora números en racha (poco atraso) si tienen socios fuertes y alta tensión de Gumbel en el resto del conjunto.
+                    """
+                    
+                    with st.spinner(f"IA ({modelo_seleccionado}) analizando patrones complejos..."):
+                        res = model.generate_content(prompt)
+                        st.info(res.text)
+                        
+                except Exception as e:
+                    st.error(f"""
+                    ⚠️ **Error en la comunicación con Gemini:**
+                    
+                    Detalle técnico: `{e}`
+                    
+                    *Nota: Se ha configurado la conexión mediante HTTPS (REST). Si el error persiste, verifique que el modelo seleccionado ({modelo_seleccionado}) esté activo en su región o cuenta.*
+                    """)
 
 # ==============================================================================
-# --- CHAT CONSULTOR (PROTEGIDO) ---
+# --- CHAT CONSULTOR (CON TRANSPORTE HTTP SEGURO) ---
 # ==============================================================================
 if 'df_final' in st.session_state:
     st.divider()
@@ -294,14 +307,15 @@ if 'df_final' in st.session_state:
         with st.chat_message("assistant"):
             if api_key:
                 try:
-                    genai.configure(api_key=api_key)
-                    model = genai.GenerativeModel('gemini-2.0-flash')
+                    # 'transport="rest"' aplicado también en el chat
+                    genai.configure(api_key=api_key, transport="rest")
+                    model = genai.GenerativeModel(modelo_seleccionado)
                     r = model.generate_content(f"Contexto: {st.session_state.df_final.head(10).to_string()}. Pregunta: {p}")
                     ans = r.text
                 except Exception as e:
-                    ans = f"Lo siento, ocurrió un error al procesar tu solicitud con la API de Gemini: {e}"
+                    ans = f"Ocurrió un error al procesar su consulta con el modelo {modelo_seleccionado}: {e}"
             else: 
-                ans = "Por favor ingresa la API Key en la barra lateral para poder responder."
+                ans = "Por favor ingrese la API Key en la barra lateral para poder responder."
                 
             st.markdown(ans)
             st.session_state.messages.append({"role": "assistant", "content": ans})
