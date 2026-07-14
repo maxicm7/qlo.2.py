@@ -245,12 +245,12 @@ if f_data and f_hist:
         # ==============================================================================
 if api_key and 'df_final' in st.session_state:
     st.divider()
-    if st.button("🧠 Consultar Veredicto Gemini 2.0 Flash"):
+    if st.button("🧠 Consultar Veredicto Gemini 2.5 Flash"):
         top_context = st.session_state.df_final.head(20).to_string()
         
         try:
             genai.configure(api_key=api_key)
-            model = genai.GenerativeModel('gemini-2.0-flash')
+            model = genai.GenerativeModel('gemini-2.5-flash')
             
             prompt = f"""
             Analiza bajo el proceso: Gumbel, Homeostasis Flexible y Correlación Dinámica.
