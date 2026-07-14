@@ -10,12 +10,11 @@ import google.generativeai as genai
 warnings.filterwarnings("ignore")
 
 # ==============================================================================
-# --- 1. CARGA DE DATOS ROBUSTA ---
+# --- 1. FUNCIONES DE PROCESAMIENTO ---
 # ==============================================================================
 @st.cache_data
 def load_and_process_data(f_data, f_hist):
     try:
-        # Carga del CSV de Atrasos
         try:
             df = pd.read_csv(f_data, sep=None, engine='python')
         except:
@@ -23,21 +22,15 @@ def load_and_process_data(f_data, f_hist):
             df = pd.read_csv(f_data, sep=';')
 
         df.columns = df.columns.astype(str).str.strip().str.capitalize()
-        
-        # Identificar columnas Numero/Atraso/Frecuencia
         col_n = next((c for c in df.columns if 'Num' in c), df.columns[0])
         col_a = next((c for c in df.columns if 'Atra' in c), df.columns[1])
-        col_f = next((c for c in df.columns if 'Frec' in c), df.columns[2])
 
         df[col_n] = pd.to_numeric(df[col_n], errors='coerce').fillna(0).astype(int)
         df[col_a] = pd.to_numeric(df[col_a], errors='coerce').fillna(0).astype(int)
-        df[col_f] = pd.to_numeric(df[col_f], errors='coerce').fillna(0).astype(int)
 
         atraso_map = dict(zip(df[col_n], df[col_a]))
-        frec_map = dict(zip(df[col_n], df[col_f]))
         total_atraso_dataset = df[col_a].sum()
 
-        # Carga del historial
         if f_hist.name.endswith('.xlsx'):
             df_h = pd.read_excel(f_hist, header=None)
         else:
@@ -50,38 +43,21 @@ def load_and_process_data(f_data, f_hist):
             if len(validos) >= 5:
                 historial_sets.append(validos)
         
-        return df, historial_sets, atraso_map, frec_map, total_atraso_dataset, col_a, col_n
-    
+        return df, historial_sets, atraso_map, total_atraso_dataset, col_a, col_n
     except Exception as e:
-        st.error(f"Error crítico en carga: {e}")
+        st.error(f"Error en carga: {e}")
         return None
 
-# ==============================================================================
-# --- 2. CÁLCULO GUMBEL ---
-# ==============================================================================
 def get_gumbel_tensions(delays_series, atraso_map):
     mu, beta = gumbel_r.fit(delays_series)
     gumbel_map = {n: gumbel_r.cdf(a, loc=mu, scale=beta) for n, a in atraso_map.items()}
     return gumbel_map, mu, beta
 
-# ==============================================================================
-# --- 3. HOMEOSTASIS GLOBAL (AJUSTADA A 3.2 SIGMA) ---
-# ==============================================================================
 def calcular_reglas_homeostaticas(historial_sets, atraso_map):
-    metricas = []
-    for s in historial_sets:
-        nums = [n for n in s if n in atraso_map]
-        if len(nums) < 5: continue
-        metricas.append({'suma': sum(nums)})
-    
+    metricas = [{'suma': sum(n for n in s if n in atraso_map)} for s in historial_sets]
     df_m = pd.DataFrame(metricas)
-    return {
-        'suma': (df_m['suma'].mean() - 3.2 * df_m['suma'].std(), df_m['suma'].mean() + 3.2 * df_m['suma'].std())
-    }
+    return {'suma': (df_m['suma'].mean() - 3.2 * df_m['suma'].std(), df_m['suma'].mean() + 3.2 * df_m['suma'].std())}
 
-# ==============================================================================
-# --- 4. CORRELACIÓN DINÁMICA ---
-# ==============================================================================
 def get_dynamic_correlation(historial_sets, window):
     recent = historial_sets[-window:] if len(historial_sets) > window else historial_sets
     corr_matrix = np.zeros((151, 151))
@@ -95,17 +71,10 @@ def get_dynamic_correlation(historial_sets, window):
                     corr_matrix[n2][n1] += 1
     return corr_matrix
 
-# ==============================================================================
-# --- 5, 6 y 7. MOTOR MASIVO 500k v4.8 (CON EQUILIBRIO Y ADAPTACIÓN DINÁMICA) ---
-# ==============================================================================
 def motor_500k_v48(n_combos, nums_disp, atraso_map, gumbel_map, corr_matrix, reglas, total_atraso, df_raw, col_a, col_n, peso_formula):
     candidatos = []
     nums_array = np.array(nums_disp)
-    
-    # Identificar números en "racha" (Atraso 0, 1 o 2)
     calientes = set(df_raw[df_raw[col_a] <= 2][col_n].tolist())
-    
-    # Divisor adaptativo basado en el volumen total de atrasos
     divisor_dinamico = max(100, total_atraso / 1.5)
     multiplicador_usuario = peso_formula / 100.0
     
@@ -113,8 +82,6 @@ def motor_500k_v48(n_combos, nums_disp, atraso_map, gumbel_map, corr_matrix, reg
     for _ in range(n_combos // batch_size):
         batch = np.array([np.random.choice(nums_array, 6, replace=False) for _ in range(batch_size)])
         sumas = batch.sum(axis=1)
-        
-        # Filtrado Homeostático basado en el historial
         mask = (sumas >= reglas['suma'][0]) & (sumas <= reglas['suma'][1])
         batch = batch[mask]
         
@@ -123,199 +90,62 @@ def motor_500k_v48(n_combos, nums_disp, atraso_map, gumbel_map, corr_matrix, reg
             atrasos_c = [atraso_map[n] for n in combo]
             tensiones_g = [gumbel_map[n] for n in combo]
             
-            # 1. Medidas de Tensión Colectiva (Gumbel)
-            mean_tension = np.mean(tensiones_g)
-            std_tension = np.std(tensiones_g) # Coexistencia de fríos y calientes
-            
-            # 2. Fórmula de Balance de Atraso (Usuario)
+            mean_tension, std_tension = np.mean(tensiones_g), np.std(tensiones_g)
             calc_especial = (total_atraso + 40) - sum(atrasos_c)
-            
-            # Normalización dinámica ponderada por el peso definido en la UI
-            valor_formula_normalizado = (calc_especial / divisor_dinamico) * multiplicador_usuario
-            
-            # 3. Coeficiente de Socios (Correlación Dinámica)
+            valor_norm = (calc_especial / divisor_dinamico) * multiplicador_usuario
             corr = sum(corr_matrix[combo[i]][combo[j]] for i in range(6) for j in range(i+1, 6))
-            
-            # 4. Cantidad de números en racha
             n_calientes = len(combo_set.intersection(calientes))
             
-            # --- SCORE EQUILIBRADO ---
-            score = (mean_tension * 50) + (std_tension * 20) + (corr * 15) + (n_calientes * 10) + (valor_formula_normalizado * 10)
+            score = (mean_tension * 50) + (std_tension * 20) + (corr * 15) + (n_calientes * 10) + (valor_norm * 10)
             
             candidatos.append({
                 'Combinación': sorted(combo.tolist()),
                 'Tension_Gumbel': round(mean_tension, 4), 
-                'Dispersion_Tension': round(std_tension, 4),
-                'Socios_Score': corr,
-                'En_Racha': n_calientes,
-                'Formula_Usuario': calc_especial,
                 'Score_IA': score
             })
-            
     return pd.DataFrame(candidatos).sort_values('Score_IA', ascending=False)
-    
+
 # ==============================================================================
-# --- INTERFAZ STREAMLIT ---
+# --- INTERFAZ ---
 # ==============================================================================
 st.set_page_config(layout="wide", page_title="Agente Predictivo v4.8")
 
 with st.sidebar:
-    st.header("⚙️ Ajustes de Sistema")
-    api_key = st.text_input("Gemini API Key", type="password", key="persist_api_key")
-    n_generar = st.select_slider("Cantidad de Análisis", options=[10000, 100000, 500000], value=500000, key="persist_n")
-    ventana = st.slider("Ventana Correlación", 10, 200, 80, key="persist_ventana")
-    
-    st.divider()
-    
-    st.subheader("📐 Influencia de Variables")
-    peso_formula = st.slider(
-        "Influencia de Fórmula Especial (%)",
-        min_value=0, max_value=100, value=25, step=5,
-        help="Ajusta el peso de su fórmula matemática en el cálculo del Score final."
-    )
-    st.subheader("📐 Influencia de Variables")
-    peso_formula = st.slider(
-        "Influencia de Fórmula Especial (%)",
-        min_value=0, max_value=100, value=25, step=5,
-        help="Ajusta el peso de su fórmula matemática en el cálculo del Score final."
-    )
-    
-    st.subheader("🧠 Configuración de IA")
-    modelo_seleccionado = st.selectbox(
-        "Seleccione Modelo Gemini",
-        options=["gemini-3.1-flash", "gemini-3.1-flash-lite", "gemini-2.5-pro"],
-        index=0,
-        help="gemini-1.5-pro se recomienda para análisis de alta complejidad en cuentas de pago."
-    )
-    st.divider()
-    if st.button("Limpiar Caché"):
-        st.cache_data.clear()
-        st.session_state.clear()
-        st.rerun()
+    st.header("⚙️ Ajustes")
+    api_key = st.text_input("Gemini API Key", type="password")
+    n_generar = st.select_slider("Cantidad", options=[10000, 100000, 500000], value=100000)
+    peso_formula = st.slider("Influencia Fórmula (%)", 0, 100, 20)
+    modelo_seleccionado = st.selectbox("Modelo IA", ["gemini-2.0-flash", "gemini-1.5-pro"])
 
-st.title("🤖 Agente Predictivo v4.8 (Pipeline Gumbel + Sensibilidad de Racha)")
+st.title("🤖 Agente Predictivo v4.8")
 
 c1, c2 = st.columns(2)
 f_data = c1.file_uploader("Subir Atrasos (CSV)", type="csv")
 f_hist = c2.file_uploader("Subir Historial (CSV/XLSX)", type=["csv", "xlsx"])
 
 if f_data and f_hist:
-    res_load = load_and_process_data(f_data, f_hist)
-    if res_load:
-        df_raw, historial, na, nf, ta, col_atraso, col_numero = res_load
-        
-        # Procesar Pipeline
-        tg, mu_g, beta_g = get_gumbel_tensions(df_raw[col_atraso], na)
+    res = load_and_process_data(f_data, f_hist)
+    if res:
+        df_raw, historial, na, ta, col_atraso, col_numero = res
+        tg, _, _ = get_gumbel_tensions(df_raw[col_atraso], na)
         reglas = calcular_reglas_homeostaticas(historial, na)
-        corr_matrix = get_dynamic_correlation(historial, ventana)
+        corr_matrix = get_dynamic_correlation(historial, 80)
         
-        if st.button(f"🔥 Ejecutar Análisis Masivo v4.8 ({n_generar:,})"):
-            start = time.time()
-            with st.spinner("Calculando Gumbel, Socios, Rachas y Pesos Dinámicos..."):
-                df_final = motor_500k_v48(
-                    n_combos=n_generar, 
-                    nums_disp=list(na.keys()), 
-                    atraso_map=na, 
-                    gumbel_map=tg, 
-                    corr_matrix=corr_matrix, 
-                    reglas=reglas, 
-                    total_atraso=ta, 
-                    df_raw=df_raw, 
-                    col_a=col_atraso, 
-                    col_n=col_numero,
-                    peso_formula=peso_formula
-                )
-                st.session_state.df_final = df_final
-                st.session_state.exec_time = time.time() - start
+        if st.button("🔥 Ejecutar Análisis"):
+            df_final = motor_500k_v48(n_generar, list(na.keys()), na, tg, corr_matrix, reglas, ta, df_raw, col_atraso, col_numero, peso_formula)
+            st.session_state.df_final = df_final
+            st.rerun()
 
-        # MÓDULO DE RESULTADOS PERSISTENTE
-        if 'df_final' in st.session_state:
-            st.success(f"Análisis finalizado en {st.session_state.exec_time:.2f}s")
-            
-            col_tabla, col_descarga = st.columns([3, 1])
-            
-            with col_tabla:
-                st.write("### 🏆 Top Combinaciones Sugeridas (Vista Previa - 40 Mejores)")
-                st.dataframe(st.session_state.df_final.head(40), use_container_width=True)
-            
-            with col_descarga:
-                st.write("### 💾 Exportar Datos")
-                st.info(f"El archivo contiene las {len(st.session_state.df_final):,} combinaciones filtradas por el modelo homeostático.")
-                
-                # Preparar descarga en UTF-8
-                csv_file = st.session_state.df_final.to_csv(index=False).encode('utf-8')
-                
-                st.download_button(
-                    label="📥 Descargar Base Completa (CSV)",
-                    data=csv_file,
-                    file_name=f"analisis_completo_v4.8_{n_generar}_combos.csv",
-                    mime="text/csv",
-                    key="btn_descarga_persistente"
-                )
-# ==============================================================================
-        # --- ANÁLISIS GEMINI (CON TRANSPORTE HTTP SEGURO) ---
-        # ==============================================================================
-        if api_key and 'df_final' in st.session_state:
-            st.divider()
-            if st.button("🧠 Consultar Veredicto Gemini"):
-                top_context = st.session_state.df_final.head(20).to_string()
-                
-                try:
-                    # 'transport="rest"' fuerza el uso de HTTPS estándar evitando bloqueos de gRPC en la nube
-                    genai.configure(api_key=api_key, transport="rest")
-                    model = genai.GenerativeModel(modelo_seleccionado)
-                    
-                    prompt = f"""
-                    Analiza bajo el proceso: Gumbel, Homeostasis Flexible y Correlación Dinámica.
-                    Top 20 Datos: {top_context}
-                    Atraso Total: {ta}. Parámetros Gumbel: mu={mu_g}, beta={beta_g}.
-                    
-                    Instrucción: Identifica la combinación ganadora. El sistema ahora valora números en racha (poco atraso) si tienen socios fuertes y alta tensión de Gumbel en el resto del conjunto.
-                    """
-                    
-                    with st.spinner(f"IA ({modelo_seleccionado}) analizando patrones complejos..."):
-                        res = model.generate_content(prompt)
-                        st.info(res.text)
-                        
-                except Exception as e:
-                    st.error(f"""
-                    ⚠️ **Error en la comunicación con Gemini:**
-                    
-                    Detalle técnico: `{e}`
-                    
-                    *Nota: Se ha configurado la conexión mediante HTTPS (REST). Si el error persiste, verifique que el modelo seleccionado ({modelo_seleccionado}) esté activo en su región o cuenta.*
-                    """)
-
-# ==============================================================================
-# --- CHAT CONSULTOR (CON TRANSPORTE HTTP SEGURO) ---
-# ==============================================================================
 if 'df_final' in st.session_state:
-    st.divider()
-    st.subheader("💬 Chat Consultor")
-    if "messages" not in st.session_state: 
-        st.session_state.messages = []
-        
-    for m in st.session_state.messages:
-        with st.chat_message(m["role"]): 
-            st.markdown(m["content"])
-    
-    if p := st.chat_input("Escribe tu duda aquí..."):
-        st.session_state.messages.append({"role": "user", "content": p})
-        with st.chat_message("user"): 
-            st.markdown(p)
-            
-        with st.chat_message("assistant"):
-            if api_key:
-                try:
-                    # 'transport="rest"' aplicado también en el chat
-                    genai.configure(api_key=api_key, transport="rest")
-                    model = genai.GenerativeModel(modelo_seleccionado)
-                    r = model.generate_content(f"Contexto: {st.session_state.df_final.head(10).to_string()}. Pregunta: {p}")
-                    ans = r.text
-                except Exception as e:
-                    ans = f"Ocurrió un error al procesar su consulta con el modelo {modelo_seleccionado}: {e}"
-            else: 
-                ans = "Por favor ingrese la API Key en la barra lateral para poder responder."
-                
-            st.markdown(ans)
-            st.session_state.messages.append({"role": "assistant", "content": ans})
+    st.dataframe(st.session_state.df_final.head(40), use_container_width=True)
+    st.download_button("📥 Descargar CSV Completo", st.session_state.df_final.to_csv(index=False).encode('utf-8'), "analisis.csv")
+
+    if api_key:
+        if st.button("🧠 Análisis IA"):
+            try:
+                genai.configure(api_key=api_key, transport="rest")
+                model = genai.GenerativeModel(modelo_seleccionado)
+                res = model.generate_content(f"Analiza: {st.session_state.df_final.head(10).to_string()}")
+                st.info(res.text)
+            except Exception as e:
+                st.error(f"Error IA: {e}")
