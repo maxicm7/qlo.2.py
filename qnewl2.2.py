@@ -240,41 +240,68 @@ if f_data and f_hist:
                     key="btn_descarga_persistente"
                 )
 
-        # Análisis Gemini
-        if api_key and 'df_final' in st.session_state:
-            st.divider()
-            if st.button("🧠 Consultar Veredicto Gemini 2.0 Flash"):
-                top_context = st.session_state.df_final.head(20).to_string()
-                genai.configure(api_key=api_key)
-                model = genai.GenerativeModel('gemini-2.0-flash')
+# ==============================================================================
+        # --- ANÁLISIS GEMINI (PROTEGIDO) ---
+        # ==============================================================================
+if api_key and 'df_final' in st.session_state:
+    st.divider()
+    if st.button("🧠 Consultar Veredicto Gemini 2.0 Flash"):
+        top_context = st.session_state.df_final.head(20).to_string()
+        
+        try:
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel('gemini-2.0-flash')
+            
+            prompt = f"""
+            Analiza bajo el proceso: Gumbel, Homeostasis Flexible y Correlación Dinámica.
+            Top 20 Datos: {top_context}
+            Atraso Total: {ta}. Parámetros Gumbel: mu={mu_g}, beta={beta_g}.
+            
+            Instrucción: Identifica la combinación ganadora. El sistema ahora valora números en racha (poco atraso) si tienen socios fuertes y alta tensión de Gumbel en el resto del conjunto.
+            """
+            
+            with st.spinner("IA analizando patrones complejos..."):
+                res = model.generate_content(prompt)
+                st.info(res.text)
                 
-                prompt = f"""
-                Analiza bajo el proceso: Gumbel, Homeostasis Flexible y Correlación Dinámica.
-                Top 20 Datos: {top_context}
-                Atraso Total: {ta}. Parámetros Gumbel: mu={mu_g}, beta={beta_g}.
-                
-                Instrucción: Identifica la combinación ganadora. El sistema ahora valora números en racha (poco atraso) si tienen socios fuertes y alta tensión de Gumbel en el resto del conjunto.
-                """
-                with st.spinner("IA analizando patrones complejos..."):
-                    res = model.generate_content(prompt)
-                    st.info(res.text)
+        except Exception as e:
+            st.error(f"""
+            ⚠️ **Error al conectar con la API de Gemini:**
+            
+            Detalle del problema: `{e}`
+            
+            *Por favor, verifique si su API Key es correcta, si tiene conexión a internet o si ha excedido su límite de consultas gratuitas.*
+            """)
 
-# Chat Consultor
+# ==============================================================================
+# --- CHAT CONSULTOR (PROTEGIDO) ---
+# ==============================================================================
 if 'df_final' in st.session_state:
     st.divider()
     st.subheader("💬 Chat Consultor")
-    if "messages" not in st.session_state: st.session_state.messages = []
+    if "messages" not in st.session_state: 
+        st.session_state.messages = []
+        
     for m in st.session_state.messages:
-        with st.chat_message(m["role"]): st.markdown(m["content"])
+        with st.chat_message(m["role"]): 
+            st.markdown(m["content"])
     
     if p := st.chat_input("Escribe tu duda aquí..."):
         st.session_state.messages.append({"role": "user", "content": p})
-        with st.chat_message("user"): st.markdown(p)
+        with st.chat_message("user"): 
+            st.markdown(p)
+            
         with st.chat_message("assistant"):
             if api_key:
-                model = genai.GenerativeModel('gemini-2.0-flash')
-                r = model.generate_content(f"Contexto: {st.session_state.df_final.head(10).to_string()}. Pregunta: {p}")
-                ans = r.text
-            else: ans = "Por favor ingresa la API Key."
+                try:
+                    genai.configure(api_key=api_key)
+                    model = genai.GenerativeModel('gemini-2.0-flash')
+                    r = model.generate_content(f"Contexto: {st.session_state.df_final.head(10).to_string()}. Pregunta: {p}")
+                    ans = r.text
+                except Exception as e:
+                    ans = f"Lo siento, ocurrió un error al procesar tu solicitud con la API de Gemini: {e}"
+            else: 
+                ans = "Por favor ingresa la API Key en la barra lateral para poder responder."
+                
             st.markdown(ans)
             st.session_state.messages.append({"role": "assistant", "content": ans})
