@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import random
 import time
 import warnings
 from scipy.stats import gumbel_r
@@ -10,7 +9,7 @@ import google.generativeai as genai
 warnings.filterwarnings("ignore")
 
 # ==============================================================================
-# --- 1. FUNCIONES DE PROCESAMIENTO ---
+# --- 1. CARGA DE DATOS ROBUSTA ---
 # ==============================================================================
 @st.cache_data
 def load_and_process_data(f_data, f_hist):
@@ -45,9 +44,10 @@ def load_and_process_data(f_data, f_hist):
         
         return df, historial_sets, atraso_map, total_atraso_dataset, col_a, col_n
     except Exception as e:
-        st.error(f"Error en carga: {e}")
+        st.error(f"Error crítico en carga: {e}")
         return None
 
+# --- 2. CÁLCULO GUMBEL Y HOMEOSTASIS ---
 def get_gumbel_tensions(delays_series, atraso_map):
     mu, beta = gumbel_r.fit(delays_series)
     gumbel_map = {n: gumbel_r.cdf(a, loc=mu, scale=beta) for n, a in atraso_map.items()}
@@ -71,6 +71,7 @@ def get_dynamic_correlation(historial_sets, window):
                     corr_matrix[n2][n1] += 1
     return corr_matrix
 
+# --- 3. MOTOR MASIVO V4.8 ---
 def motor_500k_v48(n_combos, nums_disp, atraso_map, gumbel_map, corr_matrix, reglas, total_atraso, df_raw, col_a, col_n, peso_formula):
     candidatos = []
     nums_array = np.array(nums_disp)
@@ -89,7 +90,6 @@ def motor_500k_v48(n_combos, nums_disp, atraso_map, gumbel_map, corr_matrix, reg
             combo_set = set(combo)
             atrasos_c = [atraso_map[n] for n in combo]
             tensiones_g = [gumbel_map[n] for n in combo]
-            
             mean_tension, std_tension = np.mean(tensiones_g), np.std(tensiones_g)
             calc_especial = (total_atraso + 40) - sum(atrasos_c)
             valor_norm = (calc_especial / divisor_dinamico) * multiplicador_usuario
@@ -97,28 +97,27 @@ def motor_500k_v48(n_combos, nums_disp, atraso_map, gumbel_map, corr_matrix, reg
             n_calientes = len(combo_set.intersection(calientes))
             
             score = (mean_tension * 50) + (std_tension * 20) + (corr * 15) + (n_calientes * 10) + (valor_norm * 10)
-            
             candidatos.append({
                 'Combinación': sorted(combo.tolist()),
-                'Tension_Gumbel': round(mean_tension, 4), 
-                'Score_IA': score
+                'Tension_Gumbel': round(mean_tension, 4), 'Score_IA': score
             })
     return pd.DataFrame(candidatos).sort_values('Score_IA', ascending=False)
 
-# ==============================================================================
-# --- INTERFAZ ---
-# ==============================================================================
+# --- 4. INTERFAZ Y CHAT ---
 st.set_page_config(layout="wide", page_title="Agente Predictivo v4.8")
-
 with st.sidebar:
     st.header("⚙️ Ajustes")
     api_key = st.text_input("Gemini API Key", type="password")
     n_generar = st.select_slider("Cantidad", options=[10000, 100000, 500000], value=100000)
     peso_formula = st.slider("Influencia Fórmula (%)", 0, 100, 20)
-    modelo_seleccionado = st.selectbox("Modelo IA", ["gemini-2.0-flash", "gemini-1.5-pro"])
+    
+    st.subheader("🧠 Configuración de IA")
+    modelo_seleccionado = st.selectbox(
+        "Seleccione Modelo Gemini", 
+        ["gemini-3.5-flash", "gemini-3.1-flash-lite"]
+    )
 
-st.title("🤖 Agente Predictivo v4.8")
-
+st.title("🤖 Agente Predictivo v4.8 (Pipeline Gumbel + Sensibilidad de Racha)")
 c1, c2 = st.columns(2)
 f_data = c1.file_uploader("Subir Atrasos (CSV)", type="csv")
 f_hist = c2.file_uploader("Subir Historial (CSV/XLSX)", type=["csv", "xlsx"])
@@ -132,20 +131,31 @@ if f_data and f_hist:
         corr_matrix = get_dynamic_correlation(historial, 80)
         
         if st.button("🔥 Ejecutar Análisis"):
-            df_final = motor_500k_v48(n_generar, list(na.keys()), na, tg, corr_matrix, reglas, ta, df_raw, col_atraso, col_numero, peso_formula)
-            st.session_state.df_final = df_final
+            st.session_state.df_final = motor_500k_v48(n_generar, list(na.keys()), na, tg, corr_matrix, reglas, ta, df_raw, col_atraso, col_numero, peso_formula)
             st.rerun()
 
 if 'df_final' in st.session_state:
+    st.write("### 🏆 Top Combinaciones Sugeridas")
     st.dataframe(st.session_state.df_final.head(40), use_container_width=True)
     st.download_button("📥 Descargar CSV Completo", st.session_state.df_final.to_csv(index=False).encode('utf-8'), "analisis.csv")
-
-    if api_key:
-        if st.button("🧠 Análisis IA"):
+    
+    st.divider()
+    st.subheader("💬 Chat Consultor")
+    if "messages" not in st.session_state: st.session_state.messages = []
+    for m in st.session_state.messages:
+        with st.chat_message(m["role"]): st.markdown(m["content"])
+    
+    if p := st.chat_input("Consulta a la IA:"):
+        st.session_state.messages.append({"role": "user", "content": p})
+        with st.chat_message("user"): st.markdown(p)
+        with st.chat_message("assistant"):
             try:
+                # El parámetro transport="rest" evita fallos de gRPC en la nube
                 genai.configure(api_key=api_key, transport="rest")
-                model = genai.GenerativeModel(modelo_seleccionado)
-                res = model.generate_content(f"Analiza: {st.session_state.df_final.head(10).to_string()}")
-                st.info(res.text)
+                res = genai.GenerativeModel(modelo_seleccionado).generate_content(
+                    f"Contexto: {st.session_state.df_final.head(10).to_string()}. Consulta: {p}"
+                )
+                st.markdown(res.text)
+                st.session_state.messages.append({"role": "assistant", "content": res.text})
             except Exception as e:
                 st.error(f"Error IA: {e}")
