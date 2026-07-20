@@ -5,6 +5,8 @@ import time
 import warnings
 from scipy.stats import gumbel_r
 import google.generativeai as genai
+from collections import Counter
+import itertools
 
 warnings.filterwarnings("ignore")
 
@@ -103,7 +105,39 @@ def motor_500k_v48(n_combos, nums_disp, atraso_map, gumbel_map, corr_matrix, reg
             })
     return pd.DataFrame(candidatos).sort_values('Score_IA', ascending=False)
 
-# --- 4. INTERFAZ Y CHAT ---
+# --- 4. FUNCIÓN DE COMBINACIONES REPETIDAS ---
+def buscar_combinaciones_repetidas(historial_sets, k=6, min_repeticiones=2):
+    """
+    Busca combinaciones de tamaño 'k' que se repiten en el historial procesado.
+    """
+    contador = Counter()
+
+    for s in historial_sets:
+        # El historial ya viene filtrado como un conjunto de enteros válidos
+        numeros_ordenados = sorted(list(s))
+        
+        # Generar las sub-combinaciones de tamaño k para esta fila si tiene suficientes elementos
+        if len(numeros_ordenados) >= k:
+            for comb in itertools.combinations(numeros_ordenados, k):
+                contador[comb] += 1
+
+    resultados = [
+        {"Combinacion": list(comb), "Repeticiones": freq}
+        for comb, freq in contador.items()
+        if freq >= min_repeticiones
+    ]
+
+    df_resultados = pd.DataFrame(resultados)
+    if not df_resultados.empty:
+        df_resultados = df_resultados.sort_values(
+            by="Repeticiones", ascending=False
+        ).reset_index(drop=True)
+
+    return df_resultados
+
+# ==============================================================================
+# --- 5. INTERFAZ Y CHAT ---
+# ==============================================================================
 st.set_page_config(layout="wide", page_title="Agente Predictivo v4.8")
 with st.sidebar:
     st.header("⚙️ Ajustes")
@@ -130,32 +164,83 @@ if f_data and f_hist:
         reglas = calcular_reglas_homeostaticas(historial, na)
         corr_matrix = get_dynamic_correlation(historial, 80)
         
-        if st.button("🔥 Ejecutar Análisis"):
-            st.session_state.df_final = motor_500k_v48(n_generar, list(na.keys()), na, tg, corr_matrix, reglas, ta, df_raw, col_atraso, col_numero, peso_formula)
-            st.rerun()
-
-if 'df_final' in st.session_state:
-    st.write("### 🏆 Top Combinaciones Sugeridas")
-    st.dataframe(st.session_state.df_final.head(40), use_container_width=True)
-    st.download_button("📥 Descargar CSV Completo", st.session_state.df_final.to_csv(index=False).encode('utf-8'), "analisis.csv")
-    
-    st.divider()
-    st.subheader("💬 Chat Consultor")
-    if "messages" not in st.session_state: st.session_state.messages = []
-    for m in st.session_state.messages:
-        with st.chat_message(m["role"]): st.markdown(m["content"])
-    
-    if p := st.chat_input("Consulta a la IA:"):
-        st.session_state.messages.append({"role": "user", "content": p})
-        with st.chat_message("user"): st.markdown(p)
-        with st.chat_message("assistant"):
-            try:
-                # El parámetro transport="rest" evita fallos de gRPC en la nube
-                genai.configure(api_key=api_key, transport="rest")
-                res = genai.GenerativeModel(modelo_seleccionado).generate_content(
-                    f"Contexto: {st.session_state.df_final.head(10).to_string()}. Consulta: {p}"
+        # Estructura de pestañas para dividir las funciones
+        tab_predictivo, tab_repeticiones = st.tabs([
+            "🚀 Motor Predictivo Gumbel", 
+            "📊 Analizador de Repeticiones"
+        ])
+        
+        # --- PESTAÑA 1: MOTOR PREDICTIVO ---
+        with tab_predictivo:
+            if st.button("🔥 Ejecutar Análisis Predictivo"):
+                st.session_state.df_final = motor_500k_v48(
+                    n_generar, list(na.keys()), na, tg, corr_matrix, reglas, ta, df_raw, col_atraso, col_numero, peso_formula
                 )
-                st.markdown(res.text)
-                st.session_state.messages.append({"role": "assistant", "content": res.text})
-            except Exception as e:
-                st.error(f"Error IA: {e}")
+                st.rerun()
+
+            if 'df_final' in st.session_state:
+                st.write("### 🏆 Top Combinaciones Sugeridas")
+                st.dataframe(st.session_state.df_final.head(40), use_container_width=True)
+                st.download_button(
+                    "📥 Descargar CSV Completo", 
+                    st.session_state.df_final.to_csv(index=False).encode('utf-8'), 
+                    "analisis.csv"
+                )
+                
+                st.divider()
+                st.subheader("💬 Chat Consultor")
+                if "messages" not in st.session_state: 
+                    st.session_state.messages = []
+                for m in st.session_state.messages:
+                    with st.chat_message(m["role"]): 
+                        st.markdown(m["content"])
+                
+                if p := st.chat_input("Consulta a la IA:"):
+                    st.session_state.messages.append({"role": "user", "content": p})
+                    with st.chat_message("user"): 
+                        st.markdown(p)
+                    with st.chat_message("assistant"):
+                        try:
+                            genai.configure(api_key=api_key, transport="rest")
+                            res_ia = genai.GenerativeModel(modelo_seleccionado).generate_content(
+                                f"Contexto: {st.session_state.df_final.head(10).to_string()}. Consulta: {p}"
+                            )
+                            st.markdown(res_ia.text)
+                            st.session_state.messages.append({"role": "assistant", "content": res_ia.text})
+                        except Exception as e:
+                            st.error(f"Error IA: {e}")
+
+        # --- PESTAÑA 2: ANALIZADOR DE REPETICIONES (NUEVO) ---
+        with tab_repeticiones:
+            st.subheader("🔍 Buscador de Patrones y Repeticiones")
+            st.write("Analiza las combinaciones o sub-combinaciones del historial que se han repetido con mayor frecuencia.")
+            
+            col_k, col_rep = st.columns(2)
+            k_val = col_k.slider(
+                "Tamaño de la combinación (k)", 
+                min_value=3, 
+                max_value=6, 
+                value=6,
+                help="Tamaño de los subconjuntos a buscar (por ejemplo, k=4 buscará cuaternas repetidas)"
+            )
+            min_rep = col_rep.number_input(
+                "Mínimo de repeticiones", 
+                min_value=1, 
+                value=2,
+                step=1
+            )
+            
+            if st.button("🔎 Buscar Repeticiones"):
+                with st.spinner("Analizando coincidencias en el historial..."):
+                    df_rep = buscar_combinaciones_repetidas(historial, k=k_val, min_repeticiones=min_rep)
+                    
+                    if not df_rep.empty:
+                        st.success(f"Se encontraron {len(df_rep)} combinaciones que coinciden con los criterios.")
+                        st.dataframe(df_rep, use_container_width=True)
+                        st.download_button(
+                            "📥 Descargar Repeticiones CSV",
+                            df_rep.to_csv(index=False).encode('utf-8'),
+                            "repeticiones_historial.csv"
+                        )
+                    else:
+                        st.info("No se encontraron combinaciones repetidas con los parámetros seleccionados.")
